@@ -206,10 +206,22 @@ class HolidaysService:
             is_holiday = 0
             is_extraordinary_event = 0
             event_impact = 1.0
+            after_holiday = 0  # NOVO: Efeito rebote pós-feriado
             
             # Verificar se é feriado
             if not holiday_df.empty:
                 is_holiday = 1 if date.date() in holiday_df['date'].dt.date.values else 0
+            
+            # NOVO: Verificar se é o primeiro dia útil após um feriado
+            if not holiday_df.empty and not is_holiday:
+                # Procurar feriados nos últimos 3 dias
+                for i in range(1, 4):
+                    prev_date = date - timedelta(days=i)
+                    if prev_date.date() in holiday_df['date'].dt.date.values:
+                        # Se é dia útil (segunda a sexta) e não é feriado
+                        if date.dayofweek < 5:
+                            after_holiday = 1
+                            break
             
             # Verificar eventos extraordinários
             for event in extraordinary_events:
@@ -225,6 +237,7 @@ class HolidaysService:
                 'ds': date,
                 'is_holiday': is_holiday,
                 'is_extraordinary_event': is_extraordinary_event,
+                'after_holiday': after_holiday,  # NOVO: Efeito rebote
                 'event_impact_factor': event_impact,
                 'is_holiday_weekend': 1 if is_holiday and date.weekday() >= 5 else 0,
                 'is_holiday_monday': 1 if is_holiday and date.weekday() == 0 else 0

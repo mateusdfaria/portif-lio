@@ -89,7 +89,7 @@ def _prepare_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
                 print(f"   ✅ Conversão concluída. Valores diários calculados.")
                 print(f"   📊 Estatísticas pós-conversão: min={daily_values.min():.2f}, max={daily_values.max():.2f}, média={daily_values.mean():.2f}")
     
-    # Limpeza de outliers usando Winsorization (P1-P99)
+    # Limpeza de outliers usando Winsorization (P1-P99) - MELHORADO
     print(f"🔍 Limpeza de outliers...")
     original_count = len(df)
     y_values = df["y"].values
@@ -98,12 +98,23 @@ def _prepare_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     p1 = np.percentile(y_values, 1)
     p99 = np.percentile(y_values, 99)
     
+    # Calcular limites usando 3-sigma também
+    mean_val = np.mean(y_values)
+    std_val = np.std(y_values)
+    sigma_lower = mean_val - 3 * std_val
+    sigma_upper = mean_val + 3 * std_val
+    
+    # Usar o método mais conservador (P1/P99 ou 3-sigma)
+    final_lower = max(p1, sigma_lower)
+    final_upper = min(p99, sigma_upper)
+    
     # Winsorize outliers
-    df["y"] = df["y"].clip(lower=p1, upper=p99)
+    df["y"] = df["y"].clip(lower=final_lower, upper=final_upper)
     
     outliers_removed = original_count - len(df[df["y"] != y_values])
     if outliers_removed > 0:
-        print(f"   ⚠️  {outliers_removed} outliers removidos (P1={p1:.2f}, P99={p99:.2f})")
+        print(f"   ⚠️  {outliers_removed} outliers removidos (P1={p1:.2f}, P99={p99:.2f}, 3σ={sigma_lower:.2f}-{sigma_upper:.2f})")
+        print(f"   📊 Limites finais: {final_lower:.2f} - {final_upper:.2f}")
     
     # Adicionar features de calendário úteis
     df["year"] = df["ds"].dt.year
@@ -158,14 +169,15 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
     # Growth logistic é melhor para dados cumulativos ou com limites claros
     use_logistic = y_range > y_mean * 2  # Se a variação for muito grande
     
+    # Configuração otimizada para pronto-socorro
     if use_logistic:
         print(f"📊 Usando growth logistic (variação alta: {y_range:.2f})")
         model = Prophet(
             yearly_seasonality=True,
             weekly_seasonality=True,
             daily_seasonality=False,
-            seasonality_mode="additive",
-            changepoint_prior_scale=0.02,
+            seasonality_mode="additive",  # Evita "inflar" picos
+            changepoint_prior_scale=0.01,  # Mais conservador para frear mudanças bruscas
             seasonality_prior_scale=5,
             growth="logistic",
             changepoint_range=0.8,
@@ -177,15 +189,16 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
             yearly_seasonality=True,
             weekly_seasonality=True,
             daily_seasonality=False,
-            seasonality_mode="additive",
-            changepoint_prior_scale=0.02,
+            seasonality_mode="additive",  # Evita "inflar" picos
+            changepoint_prior_scale=0.01,  # Mais conservador para frear mudanças bruscas
             seasonality_prior_scale=5,
             growth="linear",  # Melhor para dados diários como pronto socorro
             changepoint_range=0.8,
             n_changepoints=25,
         )
 
-    # Adicionar regressores externos
+    # Adicionar regressores externos (clima, feriados, etc.)
+    external_regressors = []
     for regressor_name in regressors:
         if regressor_name in df.columns:
             # Verificar se há valores NaN no regressor
@@ -193,13 +206,38 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
                 print(f"⚠️  Valores NaN encontrados em {regressor_name}, preenchendo com 0")
                 df[regressor_name] = df[regressor_name].fillna(0)
             model.add_regressor(regressor_name, standardize=True)
+            external_regressors.append(regressor_name)
+            print(f"✅ Regressor externo adicionado: {regressor_name}")
     
-    # Adicionar regressores de calendário automaticamente
-    calendar_regressors = ["is_weekend", "is_winter", "day_of_week"]
+    # Adicionar regressores de calendário automaticamente - MELHORADO
+    calendar_regressors = ["is_weekend", "is_winter", "day_of_week", "is_payday", "month_end", 
+                          "is_monday", "is_friday", "is_school_holiday"]
     for regressor_name in calendar_regressors:
         if regressor_name in df.columns:
             model.add_regressor(regressor_name, standardize=True)
             print(f"✅ Regressor de calendário adicionado: {regressor_name}")
+    
+    # Adicionar regressores climáticos avançados se disponíveis - MELHORADO
+    climate_regressors = ["tmax", "tmin", "precip", "temp_avg", "temp_range", 
+                         "thermal_comfort", "respiratory_risk", "dehydration_risk", "accident_risk"]
+    for regressor_name in climate_regressors:
+        if regressor_name in df.columns:
+            if df[regressor_name].isnull().any():
+                df[regressor_name] = df[regressor_name].fillna(0)
+            model.add_regressor(regressor_name, standardize=True)
+            print(f"✅ Regressor climático adicionado: {regressor_name}")
+    
+    # Adicionar regressores de feriados avançados se disponíveis - MELHORADO
+    holiday_regressors = ["is_holiday", "is_extraordinary_event", "after_holiday", "event_impact_factor", 
+                         "is_holiday_weekend", "is_holiday_monday"]
+    for regressor_name in holiday_regressors:
+        if regressor_name in df.columns:
+            if df[regressor_name].isnull().any():
+                df[regressor_name] = df[regressor_name].fillna(0)
+            model.add_regressor(regressor_name, standardize=True)
+            print(f"✅ Regressor de feriados adicionado: {regressor_name}")
+    
+    print(f"📊 Total de regressores adicionados: {len(external_regressors) + len(calendar_regressors) + len([r for r in climate_regressors if r in df.columns]) + len([r for r in holiday_regressors if r in df.columns])}")
 
     model.fit(df)
 
@@ -319,11 +357,22 @@ def generate_forecast(series_id: str, horizon: int, future_regressors: Optional[
             print(f"⚠️  {negative_upper} limites superiores negativos. Corrigindo para 0.")
             forecast_result['yhat_upper'] = forecast_result['yhat_upper'].clip(lower=0)
     
+    # Converter para números inteiros (arredondamento)
+    print(f"🔢 Convertendo previsões para números inteiros...")
+    forecast_result['yhat'] = forecast_result['yhat'].round().astype(int)
+    forecast_result['yhat_lower'] = forecast_result['yhat_lower'].round().astype(int)
+    forecast_result['yhat_upper'] = forecast_result['yhat_upper'].round().astype(int)
+    
+    # Garantir que os valores sejam não-negativos após conversão
+    forecast_result['yhat'] = forecast_result['yhat'].clip(lower=0)
+    forecast_result['yhat_lower'] = forecast_result['yhat_lower'].clip(lower=0)
+    forecast_result['yhat_upper'] = forecast_result['yhat_upper'].clip(lower=0)
+    
     # Estatísticas das previsões
-    print(f"📊 Estatísticas das previsões:")
-    print(f"   Mínimo: {forecast_result['yhat'].min():.2f}")
-    print(f"   Máximo: {forecast_result['yhat'].max():.2f}")
-    print(f"   Média: {forecast_result['yhat'].mean():.2f}")
+    print(f"📊 Estatísticas das previsões (números inteiros):")
+    print(f"   Mínimo: {forecast_result['yhat'].min()}")
+    print(f"   Máximo: {forecast_result['yhat'].max()}")
+    print(f"   Média: {forecast_result['yhat'].mean():.1f}")
     
     return forecast_result
 

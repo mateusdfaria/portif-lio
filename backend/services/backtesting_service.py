@@ -231,6 +231,141 @@ class BacktestingService:
         
         return results
     
+    def prophet_cross_validation(
+        self, 
+        df: pd.DataFrame, 
+        initial_days: int = 365,
+        horizon_days: int = 30,
+        period_days: int = 30,
+        params: Dict = None
+    ) -> List[BacktestResult]:
+        """Validação cruzada usando Prophet cross_validation nativo"""
+        
+        if params is None:
+            params = {
+                'seasonality_mode': 'additive',
+                'changepoint_prior_scale': 0.02,
+                'seasonality_prior_scale': 5,
+                'regressors': []
+            }
+        
+        df_prep = self.prepare_data_for_prophet(df, params.get('regressors', []))
+        
+        # Treinar modelo com todos os dados para usar cross_validation
+        model = self.train_prophet_model(df_prep, params)
+        
+        try:
+            # Usar Prophet cross_validation nativo
+            from prophet.diagnostics import cross_validation
+            
+            # Converter dias para formato Prophet
+            initial_delta = f"{initial_days} days"
+            horizon_delta = f"{horizon_days} days"
+            period_delta = f"{period_days} days"
+            
+            print(f"🔄 Executando Prophet cross_validation...")
+            print(f"   Initial: {initial_delta}, Horizon: {horizon_delta}, Period: {period_delta}")
+            
+            cv_results = cross_validation(
+                model, 
+                initial=initial_delta,
+                horizon=horizon_delta,
+                period=period_delta,
+                parallel="threads"
+            )
+            
+            print(f"✅ Prophet cross_validation concluído: {len(cv_results)} folds")
+            
+            # Converter resultados para formato BacktestResult
+            results = []
+            for i, (_, row) in enumerate(cv_results.iterrows()):
+                # Pegar dados reais correspondentes
+                actual_date = row['ds']
+                actual_data = df_prep[df_prep['ds'] == actual_date]
+                
+                if len(actual_data) > 0:
+                    actual_value = actual_data['y'].iloc[0]
+                    predicted_value = row['yhat']
+                    
+                    # Calcular métricas para este ponto
+                    metrics = self.calculate_metrics([actual_value], [predicted_value])
+                    
+                    result = BacktestResult(
+                        params=params.copy(),
+                        smape=metrics['smape'],
+                        mae=metrics['mae'],
+                        rmse=metrics['rmse'],
+                        mape=metrics['mape'],
+                        predictions=[predicted_value],
+                        actuals=[actual_value],
+                        dates=[actual_date.strftime('%Y-%m-%d')]
+                    )
+                    
+                    results.append(result)
+            
+            # Agrupar resultados por fold para métricas mais robustas
+            grouped_results = self._group_cv_results_by_fold(results, horizon_days)
+            
+            return grouped_results
+            
+        except Exception as e:
+            print(f"⚠️  Erro no Prophet cross_validation: {e}")
+            print(f"🔄 Fallback para validação cruzada manual...")
+            return self.rolling_cross_validation(df, initial_days, horizon_days, period_days, params)
+    
+    def _group_cv_results_by_fold(self, results: List[BacktestResult], horizon_days: int) -> List[BacktestResult]:
+        """Agrupa resultados de cross_validation por fold"""
+        if not results:
+            return []
+        
+        # Agrupar por períodos de horizon_days
+        grouped = {}
+        current_fold = 0
+        
+        for i, result in enumerate(results):
+            fold_key = i // horizon_days
+            if fold_key not in grouped:
+                grouped[fold_key] = []
+            grouped[fold_key].append(result)
+        
+        # Calcular métricas médias para cada fold
+        fold_results = []
+        for fold_key, fold_results_list in grouped.items():
+            if len(fold_results_list) == 0:
+                continue
+            
+            # Calcular métricas médias do fold
+            avg_smape = np.mean([r.smape for r in fold_results_list])
+            avg_mae = np.mean([r.mae for r in fold_results_list])
+            avg_rmse = np.mean([r.rmse for r in fold_results_list])
+            avg_mape = np.mean([r.mape for r in fold_results_list])
+            
+            # Combinar todas as previsões e valores reais do fold
+            all_predictions = []
+            all_actuals = []
+            all_dates = []
+            
+            for result in fold_results_list:
+                all_predictions.extend(result.predictions)
+                all_actuals.extend(result.actuals)
+                all_dates.extend(result.dates)
+            
+            fold_result = BacktestResult(
+                params=fold_results_list[0].params.copy(),
+                smape=avg_smape,
+                mae=avg_mae,
+                rmse=avg_rmse,
+                mape=avg_mape,
+                predictions=all_predictions,
+                actuals=all_actuals,
+                dates=all_dates
+            )
+            
+            fold_results.append(fold_result)
+            print(f"✅ Fold {fold_key + 1}: sMAPE médio: {avg_smape:.2f}")
+        
+        return fold_results
+    
     def grid_search(
         self, 
         df: pd.DataFrame,
