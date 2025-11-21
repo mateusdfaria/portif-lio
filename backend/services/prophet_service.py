@@ -252,11 +252,31 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
     if use_logistic:
         print(f"📊 Usando growth logistic (variação alta: {y_range:.2f})")
         prophet_kwargs["growth"] = "logistic"
-        model = Prophet(**prophet_kwargs)
     else:
         print(f"📊 Usando growth linear (dados diários normais: variação {y_range:.2f})")
         prophet_kwargs["growth"] = "linear"
+    
+    # Criar modelo Prophet com tratamento de erro específico para bug do stan_backend
+    print("🔄 Criando modelo Prophet...")
+    try:
+        # Tentar criar modelo normalmente
         model = Prophet(**prophet_kwargs)
+        print("✅ Modelo Prophet criado com sucesso")
+    except AttributeError as e:
+        if "stan_backend" in str(e):
+            print("⚠️  Erro conhecido do Prophet com stan_backend")
+            print("   Tentando criar modelo com configuração mínima...")
+            # Criar modelo com configuração mínima para evitar o bug
+            minimal_kwargs = {
+                "yearly_seasonality": True,
+                "weekly_seasonality": True,
+                "daily_seasonality": False,
+                "growth": prophet_kwargs.get("growth", "linear"),
+            }
+            model = Prophet(**minimal_kwargs)
+            print("✅ Modelo Prophet criado com configuração mínima")
+        else:
+            raise
 
     # Adicionar regressores externos (clima, feriados, etc.)
     external_regressors = []
