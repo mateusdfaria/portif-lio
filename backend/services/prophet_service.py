@@ -7,21 +7,35 @@ import joblib
 import pandas as pd
 import numpy as np
 
+# Configurar ambiente para CmdStan ANTES de importar Prophet
+import os
+
+# Forçar uso do CmdStanPy como backend
+os.environ['PROPHET_USE_CMDSTAN'] = '1'
+
 # Verificar e instalar CmdStan antes de importar Prophet
 try:
     import cmdstanpy
     try:
         # Verificar se CmdStan está instalado
-        from cmdstanpy import CmdStanModel
-        print("✅ CmdStan está disponível")
-    except Exception:
-        # Tentar instalar CmdStan
-        print("🔄 Instalando CmdStan...")
-        try:
-            cmdstanpy.install_cmdstan(version=None, verbose=False, overwrite=False)
-            print("✅ CmdStan instalado com sucesso")
-        except Exception as e:
-            print(f"⚠️  Aviso ao instalar CmdStan: {e}")
+        cmdstan_path = cmdstanpy.cmdstan_path()
+        if cmdstan_path:
+            print(f"✅ CmdStan está disponível (path: {cmdstan_path})")
+            # Configurar variável de ambiente para o Prophet encontrar o CmdStan
+            os.environ['CMDSTAN'] = cmdstan_path
+        else:
+            # Tentar instalar CmdStan
+            print("🔄 Instalando CmdStan...")
+            try:
+                cmdstanpy.install_cmdstan(version=None, verbose=False, overwrite=False)
+                cmdstan_path = cmdstanpy.cmdstan_path()
+                if cmdstan_path:
+                    os.environ['CMDSTAN'] = cmdstan_path
+                print("✅ CmdStan instalado com sucesso")
+            except Exception as e:
+                print(f"⚠️  Aviso ao instalar CmdStan: {e}")
+    except Exception as e:
+        print(f"⚠️  Erro ao verificar CmdStan: {e}")
 except ImportError:
     print("⚠️  cmdstanpy não está instalado")
 
