@@ -1,39 +1,86 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from fastapi.responses import JSONResponse
-from typing import List
 import io
-import pandas as pd
-import numpy as np
 
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from schemas.forecast import (
-    TrainRequest,
-    PredictRequest,
-    ForecastResponse,
     ForecastPoint,
+    ForecastResponse,
     ModelsResponse,
+    PredictRequest,
+    TrainRequest,
 )
-from services.prophet_service import (
-    train_and_persist_model,
-    generate_forecast,
-    list_available_models,
-)
-from services.weather_service import weather_service
-from services.holidays_service import holidays_service
-from services.calendar_service import calendar_service
-from services.ensemble_service import ensemble_service
 from services.backtesting_service import backtesting_service
 from services.baseline_service import baseline_service
+from services.calendar_service import calendar_service
+from services.ensemble_service import ensemble_service
+from services.holidays_service import holidays_service
+from services.hospital_account_service import hospital_account_service
 from services.insights_service import insights_service
 from services.metrics_service import metrics_service
-
+from services.prophet_service import (
+    generate_forecast,
+    list_available_models,
+    train_and_persist_model,
+)
+from services.weather_service import weather_service
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
+
+
+def decode_file_bytes(raw_bytes: bytes) -> str:
+    """Decodifica bytes de arquivo tentando múltiplos encodings.
+    
+    Tenta em ordem: UTF-8, ISO-8859-1 (Latin-1), Windows-1252.
+    Esses são os encodings mais comuns para arquivos CSV brasileiros.
+    """
+    encodings = ["utf-8", "iso-8859-1", "windows-1252", "latin1"]
+    
+    for encoding in encodings:
+        try:
+            return raw_bytes.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    
+    # Se nenhum encoding funcionou, tentar UTF-8 com tratamento de erros
+    return raw_bytes.decode("utf-8", errors="replace")
+
+
+def detect_csv_separator(text_content: str) -> str:
+    """Detecta o separador do CSV (; ou ,) verificando a primeira linha."""
+    # Normalizar quebras de linha
+    lines = text_content.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    if not lines:
+        return ','  # padrão
+    
+    first_line = lines[0].strip()
+    if not first_line:
+        # Se primeira linha vazia, tentar segunda
+        first_line = lines[1].strip() if len(lines) > 1 else ''
+    
+    # Contar ocorrências de cada separador
+    semicolon_count = first_line.count(';')
+    comma_count = first_line.count(',')
+    
+    # Se tem ponto e vírgula e tem mais ou igual que vírgulas, usar ponto e vírgula
+    if semicolon_count > 0 and semicolon_count >= comma_count:
+        return ';'
+    elif comma_count > 0:
+        return ','
+    else:
+        # Tentar detectar olhando múltiplas linhas
+        for line in lines[:5]:  # Verificar primeiras 5 linhas
+            if ';' in line:
+                return ';'
+            if ',' in line:
+                return ','
+        return ','  # padrão
 
 
 @router.post("/train")
 def train(request: TrainRequest):
     try:
-        records: List[dict] = [item.dict() for item in request.data]
+        records: list[dict] = [item.dict() for item in request.data]
         dataframe = pd.DataFrame.from_records(records)
         train_and_persist_model(
             series_id=request.series_id,
@@ -48,27 +95,58 @@ def train(request: TrainRequest):
 @router.post("/train-file")
 async def train_file(series_id: str = Form(...), file: UploadFile = File(...)):
     try:
+        # Validar arquivo
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Arquivo não fornecido")
+        
+        if not file.filename.endswith('.csv'):
+            raise HTTPException(status_code=400, detail="Arquivo deve ser CSV (.csv)")
+        
+        # Ler arquivo
         raw_bytes = await file.read()
-        text_stream = io.StringIO(raw_bytes.decode("utf-8"))
-        try:
-            dataframe = pd.read_csv(text_stream)
-        except Exception:
-            # Retry with semicolon delimiter, common in PT-BR locales
-            text_stream.seek(0)
-            dataframe = pd.read_csv(text_stream, sep=";")
+        if len(raw_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Arquivo vazio")
+        
+        # Decodificar com suporte a múltiplos encodings
+        text_content = decode_file_bytes(raw_bytes)
+        
+        # Detectar separador automaticamente
+        sep = detect_csv_separator(text_content)
+        
+        # Ler CSV com o separador detectado
+        text_stream = io.StringIO(text_content)
+        dataframe = pd.read_csv(text_stream, sep=sep)
 
+        # Validar colunas
         if "ds" not in dataframe.columns or "y" not in dataframe.columns:
             raise HTTPException(
                 status_code=422,
-                detail="CSV deve conter colunas 'ds' (data) e 'y' (valor).",
+                detail=f"CSV deve conter colunas 'ds' (data) e 'y' (valor). Colunas encontradas: {list(dataframe.columns)}",
             )
+        
+        # Validar dados
+        if len(dataframe) == 0:
+            raise HTTPException(status_code=422, detail="CSV não contém dados")
+        
+        # Converter coluna ds para datetime
+        dataframe['ds'] = pd.to_datetime(dataframe['ds'], errors='coerce')
+        if dataframe['ds'].isna().any():
+            raise HTTPException(status_code=422, detail="Coluna 'ds' contém datas inválidas")
+        
+        # Validar coluna y
+        dataframe['y'] = pd.to_numeric(dataframe['y'], errors='coerce')
+        if dataframe['y'].isna().any():
+            raise HTTPException(status_code=422, detail="Coluna 'y' contém valores não numéricos")
 
+        # Treinar modelo
         train_and_persist_model(series_id=series_id, dataframe=dataframe, regressors=[])
-        return {"status": "ok", "series_id": series_id}
+        return {"status": "ok", "series_id": series_id, "rows": len(dataframe)}
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - defensive guard
-        raise HTTPException(status_code=400, detail=str(exc))
+        import traceback
+        error_detail = f"{str(exc)}\n{traceback.format_exc()}"
+        raise HTTPException(status_code=500, detail=f"Erro ao processar arquivo: {str(exc)}")
 
 
 @router.post("/predict-ensemble")
@@ -76,9 +154,8 @@ async def predict_ensemble(request: PredictRequest):
     """Previsão usando ensemble Prophet + Naive Semanal"""
     try:
         # Buscar dados históricos para Naive Semanal
+
         from services.prophet_service import _get_model_path
-        import joblib
-        from pathlib import Path
         
         model_path = _get_model_path(request.series_id)
         if not model_path.exists():
@@ -130,7 +207,7 @@ async def predict(request: PredictRequest) -> ForecastResponse:
         # Habilitar regressores externos com os novos serviços
         if request.latitude is not None and request.longitude is not None:
             # tentar obter regressors para os próximos 'horizon' dias a partir de hoje
-            from datetime import date, timedelta
+            from datetime import timedelta
             start_date = pd.Timestamp.today().normalize().date()
             end_date = start_date + timedelta(days=request.horizon - 1)
             
@@ -152,7 +229,7 @@ async def predict(request: PredictRequest) -> ForecastResponse:
                 print(f"📊 Insights climáticos: {len(weather_insights)} encontrados")
                 
                 # Buscar feriados aprimorados
-                print(f"🎉 Buscando feriados aprimorados para o período...")
+                print("🎉 Buscando feriados aprimorados para o período...")
                 holidays_df, holiday_insights = holidays_service.create_enhanced_holiday_regressor(
                     pd.Timestamp(start_date),
                     pd.Timestamp(end_date)
@@ -257,7 +334,7 @@ async def predict(request: PredictRequest) -> ForecastResponse:
                     future_regs_df = future_regs_df.head(request.horizon)
                 
                 # Verificar e corrigir valores NaN
-                print(f"🔍 Verificando NaN antes da correção:")
+                print("🔍 Verificando NaN antes da correção:")
                 nan_columns = future_regs_df.columns[future_regs_df.isnull().any()].tolist()
                 if nan_columns:
                     print(f"⚠️  Colunas com NaN: {nan_columns}")
@@ -329,7 +406,7 @@ async def predict(request: PredictRequest) -> ForecastResponse:
             print(f"⚠️  Erro ao gerar insights: {e}")
             formatted_insights = {"total_insights": 0, "insights": []}
         
-        points: List[ForecastPoint] = [
+        points: list[ForecastPoint] = [
             ForecastPoint(
                 ds=str(row.ds),
                 yhat=float(row.yhat),
@@ -341,8 +418,26 @@ async def predict(request: PredictRequest) -> ForecastResponse:
         
         # Criar resposta com insights
         response = ForecastResponse(series_id=request.series_id, forecast=points)
-        # Adicionar insights como atributo adicional (será serializado pelo FastAPI)
         response.insights = formatted_insights
+
+        if request.hospital_id or request.session_token:
+            if not request.hospital_id or not request.session_token:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Forneça hospital_id e session_token para salvar histórico.",
+                )
+            if not hospital_account_service.validate_session(request.hospital_id, request.session_token):
+                raise HTTPException(status_code=401, detail="Sessão do hospital expirada ou inválida.")
+
+            avg_yhat = float(sum(point.yhat for point in points) / len(points)) if points else None
+            hospital_account_service.record_forecast(
+                hospital_id=request.hospital_id,
+                series_id=request.series_id,
+                horizon=request.horizon,
+                forecast_payload=response.dict(),
+                avg_yhat=avg_yhat,
+            )
+
         return response
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Modelo não encontrado para esta série.")
@@ -372,7 +467,7 @@ async def train_with_external(
     """
     try:
         raw_bytes = await file.read()
-        text_stream = io.StringIO(raw_bytes.decode("utf-8"))
+        text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
         except Exception:
@@ -459,7 +554,7 @@ async def backtest_model(
     """Executa backtesting com validação cruzada"""
     try:
         raw_bytes = await file.read()
-        text_stream = io.StringIO(raw_bytes.decode("utf-8"))
+        text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
         except Exception:
@@ -471,12 +566,12 @@ async def backtest_model(
 
         # Executar backtesting
         if use_prophet_cv:
-            print(f"🔄 Usando Prophet cross_validation nativo...")
+            print("🔄 Usando Prophet cross_validation nativo...")
             results = backtesting_service.prophet_cross_validation(
                 df, initial_days, horizon_days, period_days
             )
         else:
-            print(f"🔄 Usando validação cruzada manual...")
+            print("🔄 Usando validação cruzada manual...")
             results = backtesting_service.rolling_cross_validation(
                 df, initial_days, horizon_days, period_days
             )
@@ -529,7 +624,7 @@ async def grid_search_parameters(
     """Executa grid search para otimização de parâmetros"""
     try:
         raw_bytes = await file.read()
-        text_stream = io.StringIO(raw_bytes.decode("utf-8"))
+        text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
         except Exception:
@@ -611,7 +706,7 @@ async def evaluate_baselines(
     """Avalia baselines de previsão"""
     try:
         raw_bytes = await file.read()
-        text_stream = io.StringIO(raw_bytes.decode("utf-8"))
+        text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
         except Exception:
@@ -630,12 +725,12 @@ async def evaluate_baselines(
         print(f"🔍 Debug - Dados: {len(df)} linhas, período: {df['ds'].min()} a {df['ds'].max()}")
         
         if use_cross_validation:
-            print(f"🔍 Debug - Usando validação cruzada")
+            print("🔍 Debug - Usando validação cruzada")
             results = baseline_service.compare_all_baselines(
                 df, horizon, use_cross_validation=True
             )
         else:
-            print(f"🔍 Debug - Usando avaliação simples")
+            print("🔍 Debug - Usando avaliação simples")
             results = baseline_service.compare_all_baselines(df, horizon)
         
         print(f"🔍 Debug - Resultados obtidos: {len(results) if results else 0}")
@@ -673,6 +768,141 @@ async def evaluate_baselines(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/compare-predictions")
+async def compare_predictions(
+    series_id: str = Form(...),
+    file: UploadFile = File(..., description="CSV com ds,y (valores reais) para comparar com previsões"),
+    start_date: str = Form(None, description="Data inicial (YYYY-MM-DD) - opcional"),
+    end_date: str = Form(None, description="Data final (YYYY-MM-DD) - opcional"),
+):
+    """Compara previsões salvas com valores reais fornecidos"""
+    try:
+        # Ler arquivo com valores reais
+        raw_bytes = await file.read()
+        if len(raw_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Arquivo vazio")
+        
+        text_content = decode_file_bytes(raw_bytes)
+        sep = detect_csv_separator(text_content)
+        text_stream = io.StringIO(text_content)
+        actual_df = pd.read_csv(text_stream, sep=sep)
+        
+        # Validar colunas
+        if "ds" not in actual_df.columns or "y" not in actual_df.columns:
+            raise HTTPException(
+                status_code=422,
+                detail=f"CSV deve conter colunas 'ds' (data) e 'y' (valor real). Colunas encontradas: {list(actual_df.columns)}"
+            )
+        
+        # Converter datas e valores
+        actual_df['ds'] = pd.to_datetime(actual_df['ds'], errors='coerce')
+        actual_df['y'] = pd.to_numeric(actual_df['y'], errors='coerce')
+        
+        # Filtrar por datas se fornecidas
+        if start_date:
+            start = pd.to_datetime(start_date)
+            actual_df = actual_df[actual_df['ds'] >= start]
+        if end_date:
+            end = pd.to_datetime(end_date)
+            actual_df = actual_df[actual_df['ds'] <= end]
+        
+        if len(actual_df) == 0:
+            raise HTTPException(status_code=422, detail="Nenhum dado encontrado no período especificado")
+        
+        # Buscar previsões usando a função existente
+        from services.prophet_service import _get_model_path
+        import joblib
+        
+        model_path = _get_model_path(series_id)
+        if not model_path.exists():
+            raise HTTPException(status_code=404, detail=f"Modelo '{series_id}' não encontrado. Treine o modelo primeiro.")
+        
+        # Carregar modelo
+        model = joblib.load(model_path)
+        
+        # Criar DataFrame futuro com as datas dos valores reais
+        future = pd.DataFrame({'ds': actual_df['ds']})
+        
+        # Adicionar regressores se o modelo tiver
+        if hasattr(model, 'extra_regressors') and model.extra_regressors:
+            # Para simplificar, vamos usar valores padrão para regressores
+            # Em produção, você deveria buscar os valores reais dos regressores
+            for regressor_name in model.extra_regressors.keys():
+                future[regressor_name] = 0.0
+        
+        # Gerar previsões
+        forecast = model.predict(future)
+        
+        # Combinar valores reais e previstos
+        comparison_df = pd.DataFrame({
+            'ds': actual_df['ds'],
+            'actual': actual_df['y'],
+            'predicted': forecast['yhat'].values,
+            'predicted_lower': forecast['yhat_lower'].values if 'yhat_lower' in forecast.columns else None,
+            'predicted_upper': forecast['yhat_upper'].values if 'yhat_upper' in forecast.columns else None,
+        })
+        
+        # Calcular métricas
+        actual_values = comparison_df['actual'].dropna().values
+        predicted_values = comparison_df['predicted'].dropna().values
+        
+        if len(actual_values) == 0 or len(predicted_values) == 0:
+            raise HTTPException(status_code=422, detail="Dados insuficientes para comparação")
+        
+        min_length = min(len(actual_values), len(predicted_values))
+        actual_values = actual_values[:min_length]
+        predicted_values = predicted_values[:min_length]
+        
+        # Calcular métricas usando o serviço existente
+        metrics_result = metrics_service.calculate_all_metrics(
+            actual_values.tolist(),
+            predicted_values.tolist(),
+            seasonal_period=7
+        )
+        
+        quality = metrics_service.evaluate_forecast_quality(metrics_result)
+        
+        # Preparar dados para visualização
+        comparison_data = comparison_df.to_dict('records')
+        
+        return {
+            "status": "ok",
+            "series_id": series_id,
+            "period": {
+                "start": str(comparison_df['ds'].min()),
+                "end": str(comparison_df['ds'].max()),
+                "days": len(comparison_df)
+            },
+            "metrics": {
+                "mape": metrics_result.mape,
+                "smape": metrics_result.smape,
+                "rmse": metrics_result.rmse,
+                "mae": metrics_result.mae,
+                "mse": metrics_result.mse,
+                "r2": metrics_result.r2,
+                "bias": metrics_result.bias,
+                "mase": metrics_result.mase
+            },
+            "quality_assessment": quality,
+            "comparison_data": comparison_data,
+            "summary": {
+                "total_points": len(comparison_df),
+                "avg_actual": float(actual_values.mean()),
+                "avg_predicted": float(predicted_values.mean()),
+                "avg_error": float((actual_values - predicted_values).mean()),
+                "avg_abs_error": float(np.abs(actual_values - predicted_values).mean())
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Erro ao comparar previsões: {exc}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erro ao comparar previsões: {str(exc)}")
+
+
 @router.post("/metrics")
 async def calculate_metrics(
     series_id: str = Form(...),
@@ -684,7 +914,7 @@ async def calculate_metrics(
     """Calcula métricas detalhadas (MAPE, RMSE, sMAPE) para avaliação de previsões"""
     try:
         raw_bytes = await file.read()
-        text_stream = io.StringIO(raw_bytes.decode("utf-8"))
+        text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
         except Exception:

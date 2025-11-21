@@ -20,12 +20,37 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
+Para desenvolvimento:
+```bash
+pip install -r requirements-dev.txt
+ruff check backend
+pytest
+```
+
 ### Frontend
 ```bash
 cd frontend
 npm install
 npm start
 ```
+
+Qualidade:
+```bash
+npm run lint
+npm run test
+```
+
+### Variáveis de ambiente
+
+1. Copie `env.example` para `.env`.
+2. Ajuste `API_ALLOWED_ORIGINS`, `LOG_LEVEL`, `PROMETHEUS_ENABLED` e demais valores conforme o ambiente.
+
+### Qualidade e CI
+
+- Backend: `ruff check backend` e `pytest`.
+- Frontend: `npm run lint` e `npm run test`.
+- GitHub Actions (`.github/workflows/ci.yml`) executa automaticamente essas verificações em cada push/pull request.
+- Detalhes adicionais em `ENGINEERING_GUIDE.md`.
 
 ### Scripts de inicialização
 ```bash

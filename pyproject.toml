@@ -1,0 +1,22 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [
+    "backend/models",
+    "backend/services",
+    "backend/routers",
+    "backend/schemas",
+    "backend/__pycache__",
+]
+
+[tool.ruff.lint]
+extend-select = ["B", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/main.py" = ["T201"]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+addopts = "--maxfail=1 --disable-warnings"
+testpaths = ["backend/tests"]
+

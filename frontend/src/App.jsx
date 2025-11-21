@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -13,6 +13,8 @@ import {
 import html2canvas from 'html2canvas';
 import { saveAs } from 'file-saver';
 import JoinvilleSusPanel from './components/JoinvilleSusPanel';
+import HospitalSessionPanel from './components/HospitalSessionPanel';
+import PredictionComparisonPanel from './components/PredictionComparisonPanel';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
@@ -31,6 +33,13 @@ function App() {
   const [statusMsg, setStatusMsg] = useState('');
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [currentView, setCurrentView] = useState('forecast');
+  const [hospitalSession, setHospitalSession] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = window.localStorage.getItem('hospicastHospitalSession');
+    return stored ? JSON.parse(stored) : null;
+  });
+  const [hospitalHistory, setHospitalHistory] = useState([]);
+  const [historyRefreshSignal, setHistoryRefreshSignal] = useState(0);
   const chartRef = useRef(null);
 
   const canPredict = useMemo(() => Boolean(seriesId) && Number(horizon) > 0, [seriesId, horizon]);
@@ -48,6 +57,12 @@ function App() {
     if (meanYhat >= 70) return 'amarelo';
     return 'verde';
   }, [meanYhat]);
+
+  useEffect(() => {
+    if (hospitalSession?.display_name) {
+      setStatusMsg(prev => prev || `🔐 Sessão ativa para ${hospitalSession.display_name}`);
+    }
+  }, [hospitalSession, setStatusMsg]);
 
   const searchCities = async (query) => {
     if (query.length < 2) {
@@ -92,13 +107,23 @@ function App() {
       });
 
       if (res.ok) {
-        setStatusMsg('✅ Modelo treinado com sucesso!');
+        const result = await res.json();
+        setStatusMsg(`✅ Modelo treinado com sucesso! (ID: ${result.series_id})`);
       } else {
-        const error = await res.text();
-        setStatusMsg(`❌ Erro ao treinar: ${error}`);
+        let errorMsg = 'Erro desconhecido';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.detail || errorData.message || JSON.stringify(errorData);
+        } catch {
+          const errorText = await res.text();
+          errorMsg = errorText || `HTTP ${res.status}: ${res.statusText}`;
+        }
+        setStatusMsg(`❌ Erro ao treinar: ${errorMsg}`);
       }
     } catch (error) {
-      setStatusMsg(`❌ Erro ao treinar: ${error.message}`);
+      console.error('Erro ao treinar:', error);
+      const errorMsg = error.message || 'Erro de conexão. Verifique se o backend está rodando.';
+      setStatusMsg(`❌ Erro ao treinar: ${errorMsg}`);
     }
   };
 
@@ -109,7 +134,7 @@ function App() {
     }
 
     setStatusMsg('🔄 Gerando previsão...');
-    
+
     try {
       const response = await fetch(`${apiBaseUrl}/cities/${selectedCity.id}/coordinates`);
       if (!response.ok) {
@@ -117,15 +142,22 @@ function App() {
       }
       const coords = await response.json();
 
+      const bodyPayload = {
+        series_id: seriesId,
+        horizon: Number(horizon),
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      };
+
+      if (hospitalSession?.hospital_id && hospitalSession?.token) {
+        bodyPayload.hospital_id = hospitalSession.hospital_id;
+        bodyPayload.session_token = hospitalSession.token;
+      }
+
       const res = await fetch(`${apiBaseUrl}/forecast/predict`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          series_id: seriesId,
-          horizon: Number(horizon),
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-        }),
+        body: JSON.stringify(bodyPayload),
       });
 
       if (res.ok) {
@@ -133,9 +165,18 @@ function App() {
         setForecast(data.forecast || []);
         setInsights(data.insights || null);
         setStatusMsg('✅ Previsão gerada com sucesso!');
+        if (hospitalSession?.hospital_id) {
+          setHistoryRefreshSignal((prev) => prev + 1);
+        }
       } else {
         const error = await res.text();
         setStatusMsg(`❌ Erro ao prever: ${error}`);
+        if (res.status === 401 && hospitalSession) {
+          setHospitalSession(null);
+          if (typeof window !== 'undefined') {
+            window.localStorage.removeItem('hospicastHospitalSession');
+          }
+        }
       }
     } catch (error) {
       setStatusMsg(`❌ Erro ao prever: ${error.message}`);
@@ -352,6 +393,22 @@ function App() {
                 >
                   🏥 Monitoramento SUS
                 </button>
+                <button
+                  onClick={() => setCurrentView('comparison')}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: currentView === 'comparison' ? 'rgba(255, 255, 255, 0.2)' : 'transparent',
+                    color: '#ffffff',
+                    fontSize: '0.875rem',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease'
+                  }}
+                >
+                  📊 Comparar Previsões
+                </button>
               </div>
             
               <button
@@ -382,6 +439,8 @@ function App() {
       {/* Main Content */}
       {currentView === 'joinville-sus' ? (
         <JoinvilleSusPanel apiBaseUrl={apiBaseUrl} isDarkMode={isDarkMode} />
+      ) : currentView === 'comparison' ? (
+        <PredictionComparisonPanel apiBaseUrl={apiBaseUrl} isDarkMode={isDarkMode} />
       ) : (
         <div style={{
           maxWidth: '1200px',
@@ -400,6 +459,15 @@ function App() {
             flexDirection: 'column',
             gap: '1.5rem'
           }}>
+            <HospitalSessionPanel
+              apiBaseUrl={apiBaseUrl}
+              session={hospitalSession}
+              onSessionChange={setHospitalSession}
+              history={hospitalHistory}
+              onHistoryChange={setHospitalHistory}
+              setStatusMsg={setStatusMsg}
+              refreshSignal={historyRefreshSignal}
+            />
             {/* Configuration Card */}
             <div style={{
               background: theme.cardBg,

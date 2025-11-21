@@ -1,5 +1,8 @@
+from core.config import get_settings
+from core.logging import configure_logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 try:
     # Local imports may fail before files exist during initial boot; guarded import
@@ -51,16 +54,30 @@ except Exception as e:  # pragma: no cover - safe fallback before files are crea
     print(f"❌ Erro ao carregar router dos Hospitais SUS: {e}")
     joinville_sus_router = None
 
-app = FastAPI(title="HospiCast API", version="0.1.0")
+try:
+    from routers.hospital_access import router as hospital_access_router
+    print("✅ Router de acesso hospitalar carregado com sucesso")
+except Exception as e:  # pragma: no cover
+    print(f"❌ Erro ao carregar router de acesso hospitalar: {e}")
+    hospital_access_router = None
 
-# CORS for local development (React on port 3000 by default)
+settings = get_settings()
+logger = configure_logging()
+
+app = FastAPI(title=settings.api_title, version=settings.api_version)
+
+# CORS configurável (React em 3000 durante desenvolvimento por padrão)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if settings.prometheus_enabled:
+    Instrumentator().instrument(app).expose(app)
+    logger.info("📊 Endpoint /metrics habilitado para Prometheus")
 
 
 @app.get("/")
@@ -79,6 +96,7 @@ if hospitals_router:
 
 if alerts_router:
     app.include_router(alerts_router)
+    logger.debug("Router de alertas incluído")
 
 if stakeholders_router:
     app.include_router(stakeholders_router)
@@ -88,3 +106,6 @@ if real_data_router:
 
 if joinville_sus_router:
     app.include_router(joinville_sus_router)
+
+if hospital_access_router:
+    app.include_router(hospital_access_router)

@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
-from typing import List, Optional, Dict
+import logging
+from datetime import datetime
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from services.hybrid_hospital_service import hybrid_hospital_service
 from services.real_data_service import real_data_service
-import logging
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -12,8 +13,8 @@ router = APIRouter(prefix="/real-data", tags=["real-data"])
 
 @router.get("/hospitals")
 def get_real_hospitals(
-    uf: Optional[str] = Query(None, description="Filtrar por UF"),
-    municipio: Optional[str] = Query(None, description="Filtrar por município"),
+    uf: str | None = Query(None, description="Filtrar por UF"),
+    municipio: str | None = Query(None, description="Filtrar por município"),
     use_real_data: bool = Query(True, description="Usar dados reais ou simulados")
 ):
     """Lista hospitais com dados reais do CNES"""
@@ -114,7 +115,7 @@ def get_covid_data(
         if background_tasks:
             background_tasks.add_task(
                 real_data_service._make_request,
-                f"https://brasilapi.com.br/api/covid19/v1",
+                "https://brasilapi.com.br/api/covid19/v1",
                 {"uf": uf}
             )
         
@@ -130,7 +131,7 @@ def get_covid_data(
 @router.get("/holidays/{year}")
 def get_holidays_data(
     year: int,
-    uf: Optional[str] = Query(None, description="Filtrar por UF")
+    uf: str | None = Query(None, description="Filtrar por UF")
 ):
     """Busca dados de feriados por ano"""
     try:
@@ -222,8 +223,8 @@ def get_data_sources_status():
         except:
             status["weather_api"] = False
         
-        # Determinar status geral
-        available_apis = sum(status.values())
+        # Determinar status geral (contar apenas valores booleanos)
+        available_apis = sum(1 for k, v in status.items() if k != "overall_status" and v is True)
         if available_apis >= 3:
             status["overall_status"] = "excellent"
         elif available_apis >= 2:
