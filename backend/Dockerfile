@@ -18,7 +18,9 @@ RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.pytho
 
 # Install CmdStan (required by Prophet)
 # Nota: CmdStan é grande (~200MB) e pode demorar para instalar
-RUN python -c "import cmdstanpy; cmdstanpy.install_cmdstan(version=None, verbose=True, overwrite=False)" 2>&1 | head -20 || echo "CmdStan installation attempt completed"
+# Usar variável de ambiente para evitar timeout
+ENV CMDSTAN_NO_UPDATE_CHECK=1
+RUN python -c "import cmdstanpy; import os; os.environ['CMDSTAN_NO_UPDATE_CHECK']='1'; cmdstanpy.install_cmdstan(version=None, verbose=True, overwrite=False)" || echo "CmdStan installation attempt completed"
 
 # Copy application code
 COPY . .

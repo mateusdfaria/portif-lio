@@ -7,6 +7,24 @@ import joblib
 import pandas as pd
 import numpy as np
 
+# Verificar e instalar CmdStan antes de importar Prophet
+try:
+    import cmdstanpy
+    try:
+        # Verificar se CmdStan está instalado
+        from cmdstanpy import CmdStanModel
+        print("✅ CmdStan está disponível")
+    except Exception:
+        # Tentar instalar CmdStan
+        print("🔄 Instalando CmdStan...")
+        try:
+            cmdstanpy.install_cmdstan(version=None, verbose=False, overwrite=False)
+            print("✅ CmdStan instalado com sucesso")
+        except Exception as e:
+            print(f"⚠️  Aviso ao instalar CmdStan: {e}")
+except ImportError:
+    print("⚠️  cmdstanpy não está instalado")
+
 try:
     from prophet import Prophet  # type: ignore
 except Exception:  # pragma: no cover - fallback for older envs
@@ -170,32 +188,39 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
     use_logistic = y_range > y_mean * 2  # Se a variação for muito grande
     
     # Configuração otimizada para pronto-socorro
+    # Configurar backend do Stan explicitamente
+    prophet_kwargs = {
+        "yearly_seasonality": True,
+        "weekly_seasonality": True,
+        "daily_seasonality": False,
+        "seasonality_mode": "additive",  # Evita "inflar" picos
+        "changepoint_prior_scale": 0.01,  # Mais conservador para frear mudanças bruscas
+        "seasonality_prior_scale": 5,
+        "changepoint_range": 0.8,
+        "n_changepoints": 25,
+    }
+    
+    # Tentar usar CmdStanPy como backend se disponível
+    try:
+        import cmdstanpy
+        cmdstan_path = cmdstanpy.cmdstan_path()
+        if cmdstan_path:
+            prophet_kwargs["stan_backend"] = "CMDSTANPY"
+            print(f"✅ Usando CmdStanPy como backend (path: {cmdstan_path})")
+        else:
+            print("⚠️  CmdStan não encontrado, tentando continuar sem backend explícito")
+    except Exception as e:
+        print(f"⚠️  Não foi possível configurar CmdStanPy: {e}")
+        print("   Tentando continuar sem backend explícito")
+    
     if use_logistic:
         print(f"📊 Usando growth logistic (variação alta: {y_range:.2f})")
-        model = Prophet(
-            yearly_seasonality=True,
-            weekly_seasonality=True,
-            daily_seasonality=False,
-            seasonality_mode="additive",  # Evita "inflar" picos
-            changepoint_prior_scale=0.01,  # Mais conservador para frear mudanças bruscas
-            seasonality_prior_scale=5,
-            growth="logistic",
-            changepoint_range=0.8,
-            n_changepoints=25,
-        )
+        prophet_kwargs["growth"] = "logistic"
+        model = Prophet(**prophet_kwargs)
     else:
         print(f"📊 Usando growth linear (dados diários normais: variação {y_range:.2f})")
-        model = Prophet(
-            yearly_seasonality=True,
-            weekly_seasonality=True,
-            daily_seasonality=False,
-            seasonality_mode="additive",  # Evita "inflar" picos
-            changepoint_prior_scale=0.01,  # Mais conservador para frear mudanças bruscas
-            seasonality_prior_scale=5,
-            growth="linear",  # Melhor para dados diários como pronto socorro
-            changepoint_range=0.8,
-            n_changepoints=25,
-        )
+        prophet_kwargs["growth"] = "linear"
+        model = Prophet(**prophet_kwargs)
 
     # Adicionar regressores externos (clima, feriados, etc.)
     external_regressors = []
