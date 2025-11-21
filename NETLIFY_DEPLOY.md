@@ -69,59 +69,101 @@ O Netlify detecta automaticamente pushes na branch `main` e faz deploy.
    - **Build command**: `cd frontend && npm install && npm run build`
    - **Publish directory**: `frontend/dist`
 
-## 🐛 Problemas Comuns
+## 🐛 Problemas Comuns e Soluções
 
-### Erro: "Build command failed"
+### ❌ Erro: "Build command failed" ou "Command failed with exit code 1"
 
-**Causa**: Comando de build incorreto ou dependências não instaladas.
+**Possíveis causas e soluções:**
 
-**Solução**: 
-- Verifique se o comando está correto: `cd frontend && npm install && npm run build`
-- Verifique se há erros no `package.json`
+1. **Dependências não instaladas:**
+   ```bash
+   # Solução: Use npm ci em vez de npm install
+   # O netlify.toml já está configurado com npm ci
+   ```
 
-### Erro: "Publish directory does not exist"
+2. **Erro de permissão ou caminho:**
+   - Verifique se o comando está correto: `cd frontend && npm ci && npm run build`
+   - Certifique-se de que o diretório `frontend` existe
 
-**Causa**: O diretório `frontend/dist` não foi gerado.
+3. **Erro de Node.js:**
+   - Configure Node.js 20 no Netlify (já configurado no `netlify.toml`)
+   - Ou configure manualmente: **Site settings** → **Build & deploy** → **Environment** → **Node version**: `20`
 
-**Solução**:
-- Verifique se o build está gerando arquivos em `frontend/dist`
-- Execute localmente: `cd frontend && npm run build`
-- Verifique se há erros no build
+4. **Erro de memória:**
+   - Adicione no `netlify.toml`:
+   ```toml
+   [build.environment]
+     NODE_OPTIONS = "--max-old-space-size=4096"
+   ```
 
-### Erro: "API calls failing"
+### ❌ Erro: "Publish directory does not exist" ou "No such file or directory"
+
+**Causa**: O diretório `frontend/dist` não foi gerado durante o build.
+
+**Soluções:**
+
+1. **Verifique o build localmente:**
+   ```bash
+   cd frontend
+   npm ci
+   npm run build
+   # Verifique se a pasta dist/ foi criada
+   ```
+
+2. **Verifique o caminho no Netlify:**
+   - **Publish directory** deve ser: `frontend/dist` (não apenas `dist`)
+   - O `netlify.toml` já está configurado corretamente
+
+3. **Se o build falhar antes de gerar dist/:**
+   - Veja os logs completos no Netlify
+   - Procure por erros de compilação do Vite
+   - Verifique se há erros de sintaxe no código
+
+### ❌ Erro: "API calls failing" ou "Failed to fetch"
 
 **Causa**: Variável de ambiente `VITE_API_BASE_URL` não configurada ou incorreta.
 
-**Solução**:
-- Configure `VITE_API_BASE_URL` no Netlify Dashboard
-- Verifique se a URL está correta (com `https://` ou `http://`)
-- Verifique se o backend está acessível publicamente
+**Soluções:**
 
-### Erro: "404 on routes"
+1. **Configure a variável de ambiente:**
+   - **Site settings** → **Environment variables**
+   - Adicione: `VITE_API_BASE_URL` = `https://sua-api.com`
+   - ⚠️ **IMPORTANTE**: Use `https://` para produção (não `http://`)
+
+2. **Verifique se o backend está acessível:**
+   ```bash
+   curl https://sua-api.com/
+   # Deve retornar status 200
+   ```
+
+3. **Rebuild após adicionar variável:**
+   - Após adicionar a variável, faça um novo deploy
+   - Ou clique em **Trigger deploy** → **Clear cache and deploy site**
+
+### ❌ Erro: "404 on routes" ou "Page not found"
 
 **Causa**: Redirecionamentos SPA não configurados.
 
-**Solução**: O arquivo `netlify.toml` já tem a configuração correta:
-```toml
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-```
+**Solução**: 
+- O arquivo `netlify.toml` já tem a configuração correta
+- O arquivo `_redirects` também foi criado na raiz
+- Se ainda não funcionar, verifique se os arquivos estão no repositório
 
-### Erro: "CORS"
+### ❌ Erro: "CORS" ou "Access-Control-Allow-Origin"
 
 **Causa**: Backend não permite requisições do domínio do Netlify.
 
 **Solução**: Configure CORS no backend para aceitar o domínio do Netlify:
+
 ```python
-# No backend (FastAPI)
+# No backend/main.py (FastAPI)
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://seu-app.netlify.app",
+        "https://seu-app.netlify.app",  # Substitua pelo seu domínio
+        "https://*.netlify.app",  # Permite todos os subdomínios Netlify
         "http://localhost:3000",  # desenvolvimento
     ],
     allow_credentials=True,
@@ -130,16 +172,50 @@ app.add_middleware(
 )
 ```
 
+**Depois de configurar:**
+- Faça deploy do backend atualizado
+- Atualize a variável `VITE_API_BASE_URL` no Netlify
+- Faça rebuild do frontend
+
+### ❌ Erro: "Some specified paths were not resolved, unable to cache dependencies"
+
+**Causa**: Problema com cache do npm no Netlify.
+
+**Solução**: 
+- Este erro geralmente não impede o deploy
+- O `netlify.toml` já está configurado sem cache problemático
+- Se persistir, desabilite o cache no Netlify: **Site settings** → **Build & deploy** → **Caching** → Desabilite
+
+### ❌ Erro: "Module not found" ou "Cannot find module"
+
+**Causa**: Dependências não instaladas ou versão incorreta do Node.
+
+**Soluções:**
+1. Verifique se `package-lock.json` está no repositório
+2. Use `npm ci` em vez de `npm install` (já configurado)
+3. Configure Node.js 20 no Netlify
+
+### ❌ Erro: "Build timed out"
+
+**Causa**: Build demorando mais de 15 minutos.
+
+**Soluções:**
+1. Otimize o build (já está otimizado com `npm ci`)
+2. Verifique se há processos lentos no build
+3. Considere usar Netlify Pro para builds mais longos
+
 ## ✅ Checklist de Deploy
 
 - [ ] Repositório conectado ao Netlify
-- [ ] Build command configurado: `cd frontend && npm install && npm run build`
+- [ ] Build command configurado: `cd frontend && npm ci && npm run build`
 - [ ] Publish directory configurado: `frontend/dist`
+- [ ] Node.js 20 configurado (ou via `netlify.toml`)
 - [ ] Variável de ambiente `VITE_API_BASE_URL` configurada
 - [ ] Backend acessível publicamente
 - [ ] CORS configurado no backend
 - [ ] Build local funcionando: `cd frontend && npm run build`
 - [ ] Arquivo `netlify.toml` no repositório
+- [ ] Arquivo `_redirects` no repositório (opcional, mas recomendado)
 
 ## 🔗 Links Úteis
 
