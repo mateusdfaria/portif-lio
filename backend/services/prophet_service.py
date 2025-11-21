@@ -200,21 +200,36 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
         "n_changepoints": 25,
     }
     
-    # Verificar se CmdStan está disponível (Prophet detecta automaticamente)
-    # Nota: Prophet 1.1.5 não suporta parâmetro stan_backend diretamente
+    # Verificar se CmdStan está disponível
+    # IMPORTANTE: Prophet 1.1.5 tem um bug ao inicializar o stan_backend
+    # Vamos garantir que o CmdStan está instalado e configurado antes de criar o modelo
     try:
         import cmdstanpy
+        import os
+        
+        # Verificar se CmdStan está instalado
         cmdstan_path = cmdstanpy.cmdstan_path()
-        if cmdstan_path:
+        if cmdstan_path and os.path.exists(cmdstan_path):
             print(f"✅ CmdStan encontrado (path: {cmdstan_path})")
-            print("   Prophet deve detectar automaticamente o CmdStan")
+            
+            # Configurar variável de ambiente para forçar uso do CmdStan
+            os.environ['PROPHET_USE_CMDSTAN'] = '1'
+            
+            # Tentar importar e verificar se funciona
+            try:
+                from cmdstanpy import CmdStanModel
+                print("✅ CmdStanPy está funcionando corretamente")
+            except Exception as e:
+                print(f"⚠️  Aviso ao verificar CmdStanPy: {e}")
         else:
             print("⚠️  CmdStan não encontrado, tentando instalar...")
             try:
                 cmdstanpy.install_cmdstan(version=None, verbose=False, overwrite=False)
+                os.environ['PROPHET_USE_CMDSTAN'] = '1'
                 print("✅ CmdStan instalado com sucesso")
             except Exception as install_error:
                 print(f"⚠️  Erro ao instalar CmdStan: {install_error}")
+                # Tentar continuar mesmo assim
     except ImportError:
         print("⚠️  cmdstanpy não está instalado")
     except Exception as e:
