@@ -200,18 +200,25 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
         "n_changepoints": 25,
     }
     
-    # Tentar usar CmdStanPy como backend se disponível
+    # Verificar se CmdStan está disponível (Prophet detecta automaticamente)
+    # Nota: Prophet 1.1.5 não suporta parâmetro stan_backend diretamente
     try:
         import cmdstanpy
         cmdstan_path = cmdstanpy.cmdstan_path()
         if cmdstan_path:
-            prophet_kwargs["stan_backend"] = "CMDSTANPY"
-            print(f"✅ Usando CmdStanPy como backend (path: {cmdstan_path})")
+            print(f"✅ CmdStan encontrado (path: {cmdstan_path})")
+            print("   Prophet deve detectar automaticamente o CmdStan")
         else:
-            print("⚠️  CmdStan não encontrado, tentando continuar sem backend explícito")
+            print("⚠️  CmdStan não encontrado, tentando instalar...")
+            try:
+                cmdstanpy.install_cmdstan(version=None, verbose=False, overwrite=False)
+                print("✅ CmdStan instalado com sucesso")
+            except Exception as install_error:
+                print(f"⚠️  Erro ao instalar CmdStan: {install_error}")
+    except ImportError:
+        print("⚠️  cmdstanpy não está instalado")
     except Exception as e:
-        print(f"⚠️  Não foi possível configurar CmdStanPy: {e}")
-        print("   Tentando continuar sem backend explícito")
+        print(f"⚠️  Erro ao verificar CmdStan: {e}")
     
     if use_logistic:
         print(f"📊 Usando growth logistic (variação alta: {y_range:.2f})")
