@@ -146,6 +146,7 @@ async def train_file(series_id: str = Form(...), file: UploadFile = File(...)):
     except Exception as exc:  # pragma: no cover - defensive guard
         import traceback
         error_detail = f"{str(exc)}\n{traceback.format_exc()}"
+        print(f"❌ Erro completo ao treinar: {error_detail}")
         raise HTTPException(status_code=500, detail=f"Erro ao processar arquivo: {str(exc)}")
 
 

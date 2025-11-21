@@ -239,7 +239,22 @@ def train_and_persist_model(series_id: str, dataframe: pd.DataFrame, regressors:
     
     print(f"📊 Total de regressores adicionados: {len(external_regressors) + len(calendar_regressors) + len([r for r in climate_regressors if r in df.columns]) + len([r for r in holiday_regressors if r in df.columns])}")
 
-    model.fit(df)
+    # Verificar se CmdStan está disponível antes de treinar
+    try:
+        import cmdstanpy
+        print("✅ CmdStan disponível")
+    except ImportError:
+        print("⚠️  CmdStan não está disponível. Tentando continuar mesmo assim...")
+    
+    print(f"🔄 Iniciando treinamento do modelo Prophet...")
+    try:
+        model.fit(df)
+        print(f"✅ Modelo treinado com sucesso!")
+    except Exception as e:
+        import traceback
+        error_msg = f"Erro ao treinar modelo Prophet: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg) from e
 
     model_path = _get_model_path(series_id)
     joblib.dump(model, model_path)
