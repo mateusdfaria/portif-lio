@@ -7,11 +7,6 @@ from datetime import datetime, timedelta
 import json
 import logging
 from urllib.parse import urlencode
-from services.joinville_sus_database import (
-    init_database, save_hospital, get_all_hospitals as db_get_all_hospitals,
-    get_hospital_by_cnes as db_get_hospital_by_cnes, save_multiple_sus_data,
-    get_sus_data as db_get_sus_data, has_sus_data, HospitalRecord, SusDataRecord
-)
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -69,29 +64,7 @@ class JoinvilleSusService:
         self.hospitals = self._load_joinville_hospitals()
     
     def _load_joinville_hospitals(self) -> List[JoinvilleSusHospital]:
-        """Carrega hospitais públicos de Joinville do banco de dados ou cria padrão"""
-        # Tentar carregar do banco
-        db_hospitals = db_get_all_hospitals()
-        if db_hospitals:
-            logger.info(f"Carregados {len(db_hospitals)} hospitais do banco de dados")
-            return [JoinvilleSusHospital(
-                cnes=h.cnes,
-                nome=h.nome,
-                endereco=h.endereco,
-                telefone=h.telefone,
-                tipo_gestao=h.tipo_gestao,
-                capacidade_total=h.capacidade_total,
-                capacidade_uti=h.capacidade_uti,
-                capacidade_emergencia=h.capacidade_emergencia,
-                especialidades=h.especialidades,
-                latitude=h.latitude,
-                longitude=h.longitude,
-                municipio=h.municipio,
-                uf=h.uf
-            ) for h in db_hospitals]
-        
-        # Se não houver no banco, criar padrão e salvar
-        logger.info("Criando hospitais padrão e salvando no banco")
+        """Carrega hospitais públicos de Joinville (dados estáticos para monitoramento)"""
         hospitals_data = [
             {
                 "cnes": "1234567",  # CNES fictício - substituir por real
@@ -169,28 +142,7 @@ class JoinvilleSusService:
             }
         ]
         
-        hospitals = [JoinvilleSusHospital(**hospital) for hospital in hospitals_data]
-        
-        # Salvar no banco
-        for hospital in hospitals:
-            save_hospital(HospitalRecord(
-                cnes=hospital.cnes,
-                nome=hospital.nome,
-                endereco=hospital.endereco,
-                telefone=hospital.telefone,
-                tipo_gestao=hospital.tipo_gestao,
-                capacidade_total=hospital.capacidade_total,
-                capacidade_uti=hospital.capacidade_uti,
-                capacidade_emergencia=hospital.capacidade_emergencia,
-                especialidades=hospital.especialidades,
-                latitude=hospital.latitude,
-                longitude=hospital.longitude,
-                municipio=hospital.municipio,
-                uf=hospital.uf
-            ))
-        
-        logger.info(f"Salvos {len(hospitals)} hospitais no banco de dados")
-        return hospitals
+        return [JoinvilleSusHospital(**hospital) for hospital in hospitals_data]
     
     def _make_request(self, url: str, params: Dict = None, timeout: int = 30) -> Optional[Dict]:
         """Faz requisição HTTP com tratamento de erros"""
@@ -222,77 +174,18 @@ class JoinvilleSusService:
             return None
 
     def get_sus_data(self, cnes: str, start_date: str, end_date: str) -> List[JoinvilleSusData]:
-        """Busca dados reais do SUS para um hospital"""
+        """Busca dados reais do SUS para um hospital (apenas da API, não salva no banco)"""
         try:
-            # Primeiro, tentar buscar do banco de dados
-            db_data = db_get_sus_data(cnes, start_date, end_date)
-            if db_data:
-                logger.info(f"Carregados {len(db_data)} registros do banco de dados")
-                return [JoinvilleSusData(
-                    cnes=d.cnes,
-                    data=d.data,
-                    ocupacao_leitos=d.ocupacao_leitos,
-                    ocupacao_uti=d.ocupacao_uti,
-                    ocupacao_emergencia=d.ocupacao_emergencia,
-                    pacientes_internados=d.pacientes_internados,
-                    pacientes_uti=d.pacientes_uti,
-                    pacientes_emergencia=d.pacientes_emergencia,
-                    admissoes_dia=d.admissoes_dia,
-                    altas_dia=d.altas_dia,
-                    procedimentos_realizados=d.procedimentos_realizados,
-                    tempo_espera_medio=d.tempo_espera_medio,
-                    taxa_ocupacao=d.taxa_ocupacao
-                ) for d in db_data]
-            
             # Tentar buscar dados reais do SIH/Datasus
             real_data = self._get_datasus_sus_data(cnes, start_date, end_date)
             
             if real_data:
-                logger.info(f"Carregados {len(real_data)} registros reais do SUS")
-                # Salvar no banco
-                sus_records = [SusDataRecord(
-                    cnes=d.cnes,
-                    data=d.data,
-                    ocupacao_leitos=d.ocupacao_leitos,
-                    ocupacao_uti=d.ocupacao_uti,
-                    ocupacao_emergencia=d.ocupacao_emergencia,
-                    pacientes_internados=d.pacientes_internados,
-                    pacientes_uti=d.pacientes_uti,
-                    pacientes_emergencia=d.pacientes_emergencia,
-                    admissoes_dia=d.admissoes_dia,
-                    altas_dia=d.altas_dia,
-                    procedimentos_realizados=d.procedimentos_realizados,
-                    tempo_espera_medio=d.tempo_espera_medio,
-                    taxa_ocupacao=d.taxa_ocupacao
-                ) for d in real_data]
-                save_multiple_sus_data(sus_records)
+                logger.info(f"Carregados {len(real_data)} registros reais do SUS via API")
                 return real_data
             
-            # Se não conseguir dados reais, gerar e salvar
-            logger.warning("Gerando dados baseados em padrões SUS e salvando no banco")
-            generated_data = self._generate_sus_realistic_data(cnes, start_date, end_date)
-            
-            # Salvar dados gerados no banco
-            if generated_data:
-                sus_records = [SusDataRecord(
-                    cnes=d.cnes,
-                    data=d.data,
-                    ocupacao_leitos=d.ocupacao_leitos,
-                    ocupacao_uti=d.ocupacao_uti,
-                    ocupacao_emergencia=d.ocupacao_emergencia,
-                    pacientes_internados=d.pacientes_internados,
-                    pacientes_uti=d.pacientes_uti,
-                    pacientes_emergencia=d.pacientes_emergencia,
-                    admissoes_dia=d.admissoes_dia,
-                    altas_dia=d.altas_dia,
-                    procedimentos_realizados=d.procedimentos_realizados,
-                    tempo_espera_medio=d.tempo_espera_medio,
-                    taxa_ocupacao=d.taxa_ocupacao
-                ) for d in generated_data]
-                save_multiple_sus_data(sus_records)
-                logger.info(f"Salvos {len(sus_records)} registros no banco de dados")
-            
-            return generated_data
+            # Se não conseguir dados reais, gerar dados baseados em padrões SUS
+            logger.warning("Usando dados baseados em padrões SUS (gerados dinamicamente)")
+            return self._generate_sus_realistic_data(cnes, start_date, end_date)
             
         except Exception as e:
             logger.error(f"Erro ao buscar dados SUS: {e}")
@@ -431,51 +324,11 @@ class JoinvilleSusService:
         return max(0.6, min(0.98, occupancy))  # Limitar entre 60% e 98%
 
     def get_all_hospitals(self) -> List[JoinvilleSusHospital]:
-        """Retorna todos os hospitais públicos de Joinville"""
-        # Sempre buscar do banco para garantir dados atualizados
-        db_hospitals = db_get_all_hospitals()
-        if db_hospitals:
-            return [JoinvilleSusHospital(
-                cnes=h.cnes,
-                nome=h.nome,
-                endereco=h.endereco,
-                telefone=h.telefone,
-                tipo_gestao=h.tipo_gestao,
-                capacidade_total=h.capacidade_total,
-                capacidade_uti=h.capacidade_uti,
-                capacidade_emergencia=h.capacidade_emergencia,
-                especialidades=h.especialidades,
-                latitude=h.latitude,
-                longitude=h.longitude,
-                municipio=h.municipio,
-                uf=h.uf
-            ) for h in db_hospitals]
-        
-        # Se não houver no banco, retornar da memória (será salvo na próxima vez)
+        """Retorna todos os hospitais públicos de Joinville (dados estáticos)"""
         return self.hospitals
 
     def get_hospital_by_cnes(self, cnes: str) -> Optional[JoinvilleSusHospital]:
         """Retorna hospital por CNES"""
-        # Sempre buscar do banco primeiro
-        db_hospital = db_get_hospital_by_cnes(cnes)
-        if db_hospital:
-            return JoinvilleSusHospital(
-                cnes=db_hospital.cnes,
-                nome=db_hospital.nome,
-                endereco=db_hospital.endereco,
-                telefone=db_hospital.telefone,
-                tipo_gestao=db_hospital.tipo_gestao,
-                capacidade_total=db_hospital.capacidade_total,
-                capacidade_uti=db_hospital.capacidade_uti,
-                capacidade_emergencia=db_hospital.capacidade_emergencia,
-                especialidades=db_hospital.especialidades,
-                latitude=db_hospital.latitude,
-                longitude=db_hospital.longitude,
-                municipio=db_hospital.municipio,
-                uf=db_hospital.uf
-            )
-        
-        # Se não encontrar no banco, buscar na memória
         return next((h for h in self.hospitals if h.cnes == cnes), None)
 
     def get_sus_kpis(self, cnes: str, start_date: str, end_date: str) -> Dict:
