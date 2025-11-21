@@ -11,19 +11,33 @@ from typing import Any
 
 import bcrypt
 
+# Diretório de dados - funciona em desenvolvimento e produção
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True, mode=0o755)  # Garantir permissões
 DB_PATH = DATA_DIR / "hospital_access.db"
 
 
 def _get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    """Retorna conexão com o banco de dados, criando se necessário"""
+    # Garantir que o diretório existe
+    DATA_DIR.mkdir(exist_ok=True, mode=0o755)
+    
+    # Conectar ao banco (cria automaticamente se não existir)
+    conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    
+    # Habilitar foreign keys
+    conn.execute("PRAGMA foreign_keys = ON")
+    
+    # Criar schema se necessário
     _ensure_schema(conn)
+    
     return conn
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Cria as tabelas do banco de dados se não existirem"""
+    # Tabela de contas de hospitais
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS hospital_accounts (
@@ -39,6 +53,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    
+    # Tabela de sessões (tokens)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS hospital_sessions (
@@ -50,6 +66,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    
+    # Tabela de previsões (histórico)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS hospital_forecasts (
@@ -64,6 +82,39 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    
+    # Criar índices para melhor performance
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sessions_hospital_id 
+        ON hospital_sessions(hospital_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sessions_token 
+        ON hospital_sessions(token)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_forecasts_hospital_id 
+        ON hospital_forecasts(hospital_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_forecasts_created_at 
+        ON hospital_forecasts(created_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_forecasts_hospital_created 
+        ON hospital_forecasts(hospital_id, created_at DESC)
+        """
+    )
+    
     conn.commit()
 
 
