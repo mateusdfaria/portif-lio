@@ -16,6 +16,9 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r requirements.txt
 
+# Install CmdStan (required by Prophet)
+RUN python -c "import cmdstanpy; cmdstanpy.install_cmdstan(version=None, verbose=False)" || echo "CmdStan installation skipped (may already be installed)"
+
 # Copy application code
 COPY . .
 

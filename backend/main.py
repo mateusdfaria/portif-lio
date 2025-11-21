@@ -4,6 +4,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
+# Verificar/instalar CmdStan se necessário (para Prophet)
+try:
+    import cmdstanpy
+    try:
+        # Verificar se CmdStan está instalado
+        cmdstanpy.install_cmdstan(version=None, verbose=False)
+        print("✅ CmdStan verificado/instalado com sucesso")
+    except Exception as e:
+        print(f"⚠️  Aviso ao verificar CmdStan: {e}")
+except ImportError:
+    print("⚠️  cmdstanpy não está instalado. Prophet pode não funcionar corretamente.")
+
 try:
     # Local imports may fail before files exist during initial boot; guarded import
     from routers.forecast import router as forecast_router
