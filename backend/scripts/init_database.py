@@ -3,8 +3,9 @@
 import sys
 from pathlib import Path
 
-# Adicionar o diretório raiz ao path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Adicionar o diretório backend ao path
+backend_dir = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(backend_dir))
 
 from services.hospital_account_service import _get_connection, _ensure_schema
 
