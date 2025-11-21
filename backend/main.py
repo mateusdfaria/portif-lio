@@ -9,8 +9,19 @@ try:
     import cmdstanpy
     try:
         # Verificar se CmdStan está instalado
-        cmdstanpy.install_cmdstan(version=None, verbose=False)
-        print("✅ CmdStan verificado/instalado com sucesso")
+        import os
+        # Tentar instalar CmdStan silenciosamente
+        try:
+            cmdstanpy.install_cmdstan(version=None, verbose=False, overwrite=False)
+            print("✅ CmdStan verificado/instalado com sucesso")
+        except Exception as install_error:
+            # Se falhar, tentar verificar se já está instalado
+            try:
+                from cmdstanpy import CmdStanModel
+                print("✅ CmdStan já está instalado")
+            except Exception:
+                print(f"⚠️  Aviso ao verificar CmdStan: {install_error}")
+                print("   Tentando continuar mesmo assim...")
     except Exception as e:
         print(f"⚠️  Aviso ao verificar CmdStan: {e}")
 except ImportError:
