@@ -1,0 +1,38 @@
+[build]
+  # Diretório base do projeto
+  base = "."
+  
+  # Comando para build do frontend
+  command = "cd frontend && npm ci && npm run build"
+  
+  # Diretório de saída do build (onde o Vite gera os arquivos)
+  publish = "frontend/dist"
+  
+  # Variáveis de ambiente (podem ser sobrescritas no painel do Netlify)
+  [build.environment]
+    NODE_VERSION = "20"
+    NPM_FLAGS = "--legacy-peer-deps"
+
+# Configurações de redirecionamento para SPA (Single Page Application)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Headers de segurança
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Variáveis de ambiente (serão configuradas no painel do Netlify)
+# VITE_API_BASE_URL será configurada nas variáveis de ambiente do Netlify
+
