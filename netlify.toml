@@ -3,7 +3,7 @@
   base = "."
   
   # Comando para build do frontend
-  command = "cd frontend && npm ci && npm run build"
+  command = "cd frontend && npm install && npm run build"
   
   # Diretório de saída do build (onde o Vite gera os arquivos)
   publish = "frontend/dist"
