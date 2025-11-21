@@ -28,7 +28,7 @@ jobs:
       - name: Pytest
         env:
           PYTHONPATH: backend
-        run: pytest
+        run: pytest backend/tests/
 
       - name: Setup Node
         uses: actions/setup-node@v4

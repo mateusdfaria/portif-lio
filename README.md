@@ -1,5 +1,8 @@
 # HospiCast - Sistema de Previsão de Demanda Hospitalar
 
+[![CI](https://github.com/mateusdfaria/portif-lio/actions/workflows/ci.yml/badge.svg)](https://github.com/mateusdfaria/portif-lio/actions/workflows/ci.yml)
+[![Deploy](https://github.com/mateusdfaria/portif-lio/actions/workflows/deploy.yml/badge.svg)](https://github.com/mateusdfaria/portif-lio/actions/workflows/deploy.yml)
+
 Este repositório contém o projeto HospiCast, um sistema completo de previsão de demanda hospitalar utilizando Prophet e outras técnicas de machine learning.
 
 ## Estrutura
