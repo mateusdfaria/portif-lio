@@ -32,6 +32,8 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# package-lock.json deve ser commitado para builds consistentes
+# !package-lock.json
 
 # Frontend build
 frontend/dist/
