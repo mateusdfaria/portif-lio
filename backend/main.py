@@ -5,27 +5,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 # Verificar/instalar CmdStan se necessário (para Prophet)
-try:
-    import cmdstanpy
+# NOTA: Em produção (Cloud Run), CmdStan já está instalado no Dockerfile
+# Esta verificação é apenas para desenvolvimento local
+import os
+if os.getenv("ENVIRONMENT") != "production":
     try:
-        # Verificar se CmdStan está instalado
-        import os
-        # Tentar instalar CmdStan silenciosamente
+        import cmdstanpy
         try:
-            cmdstanpy.install_cmdstan(version=None, verbose=False, overwrite=False)
-            print("✅ CmdStan verificado/instalado com sucesso")
-        except Exception as install_error:
-            # Se falhar, tentar verificar se já está instalado
-            try:
-                from cmdstanpy import CmdStanModel
-                print("✅ CmdStan já está instalado")
-            except Exception:
-                print(f"⚠️  Aviso ao verificar CmdStan: {install_error}")
-                print("   Tentando continuar mesmo assim...")
-    except Exception as e:
-        print(f"⚠️  Aviso ao verificar CmdStan: {e}")
-except ImportError:
-    print("⚠️  cmdstanpy não está instalado. Prophet pode não funcionar corretamente.")
+            # Verificar se CmdStan está instalado (sem instalar)
+            from cmdstanpy import CmdStanModel
+            print("✅ CmdStan já está instalado")
+        except Exception:
+            # Em produção, não tentar instalar (já está no Dockerfile)
+            print("⚠️  CmdStan não encontrado, mas continuando...")
+    except ImportError:
+        print("⚠️  cmdstanpy não está instalado. Prophet pode não funcionar corretamente.")
+else:
+    print("✅ Ambiente de produção - CmdStan já instalado no container")
 
 try:
     # Local imports may fail before files exist during initial boot; guarded import
@@ -92,7 +88,7 @@ app = FastAPI(title=settings.api_title, version=settings.api_version)
 # CORS configurável (React em 3000 durante desenvolvimento por padrão)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins or ["*"],
+    allow_origins=settings.get_allowed_origins_list(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
