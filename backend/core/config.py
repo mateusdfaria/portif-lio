@@ -15,26 +15,27 @@ except ImportError:
             "Instale com: pip install pydantic pydantic-settings"
         )
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, ConfigDict
 import os
 
 
 class Settings(BaseSettings):
     """Configurações globais do backend carregadas via variáveis de ambiente."""
 
-    api_title: str = Field("HospiCast API", env="API_TITLE")
-    api_version: str = Field("0.1.0", env="API_VERSION")
-    allowed_origins: str = Field("*", env="API_ALLOWED_ORIGINS")  # String para evitar parse JSON
-    log_level: str = Field("INFO", env="LOG_LEVEL")
-    prometheus_enabled: bool = Field(True, env="PROMETHEUS_ENABLED")
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8"
+    )
+
+    api_title: str = Field(default="HospiCast API")
+    api_version: str = Field(default="0.1.0")
+    allowed_origins: str = Field(default="*")  # String para evitar parse JSON
+    log_level: str = Field(default="INFO")
+    prometheus_enabled: bool = Field(default=True)
     
     # Database configuration
-    database_url: str | None = Field(None, env="DATABASE_URL")
-    database_type: str = Field("sqlite", env="DATABASE_TYPE")  # sqlite or postgresql
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    database_url: str | None = Field(default=None)
+    database_type: str = Field(default="sqlite")  # sqlite or postgresql
     
     def __init__(self, **data):
         # Interceptar API_ALLOWED_ORIGINS da variável de ambiente antes do Pydantic tentar fazer parse JSON
