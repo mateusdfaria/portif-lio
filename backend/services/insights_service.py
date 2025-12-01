@@ -291,12 +291,31 @@ class InsightsService:
             impact = insight.get("impact", "low")
             impact_counts[impact] += 1
         
+        # Converter valores para tipos Python nativos (evitar numpy.int64)
+        def convert_to_native(value):
+            """Converte valores numpy para tipos Python nativos"""
+            if hasattr(value, 'item'):
+                return value.item()
+            if isinstance(value, (np.integer, np.int64, np.int32)):
+                return int(value)
+            if isinstance(value, (np.floating, np.float64, np.float32)):
+                return float(value)
+            return value
+        
+        # Converter insights para garantir que não há valores numpy
+        converted_insights = []
+        for insight in insights[:10]:  # Limitar a 10 insights mais importantes
+            converted_insight = {}
+            for key, value in insight.items():
+                converted_insight[key] = convert_to_native(value)
+            converted_insights.append(converted_insight)
+        
         return {
-            "total_insights": len(insights),
-            "high_impact": impact_counts["high"],
-            "medium_impact": impact_counts["medium"],
-            "low_impact": impact_counts["low"],
-            "insights": insights[:10]  # Limitar a 10 insights mais importantes
+            "total_insights": int(len(insights)),
+            "high_impact": int(impact_counts["high"]),
+            "medium_impact": int(impact_counts["medium"]),
+            "low_impact": int(impact_counts["low"]),
+            "insights": converted_insights
         }
 
 # Instância global do serviço

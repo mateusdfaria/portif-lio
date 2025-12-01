@@ -407,12 +407,25 @@ async def predict(request: PredictRequest) -> ForecastResponse:
             print(f"⚠️  Erro ao gerar insights: {e}")
             formatted_insights = {"total_insights": 0, "insights": []}
         
+        # Converter valores numpy para tipos Python nativos antes de criar ForecastPoint
+        def convert_numpy_value(value):
+            """Converte valores numpy para tipos Python nativos"""
+            if pd.isna(value):
+                return None
+            if hasattr(value, 'item'):
+                return value.item()
+            if isinstance(value, (np.integer, np.int64, np.int32)):
+                return int(value)
+            if isinstance(value, (np.floating, np.float64, np.float32)):
+                return float(value)
+            return float(value) if value is not None else None
+        
         points: list[ForecastPoint] = [
             ForecastPoint(
                 ds=str(row.ds),
-                yhat=float(row.yhat),
-                yhat_lower=float(row.yhat_lower) if not pd.isna(row.yhat_lower) else None,
-                yhat_upper=float(row.yhat_upper) if not pd.isna(row.yhat_upper) else None,
+                yhat=convert_numpy_value(row.yhat),
+                yhat_lower=convert_numpy_value(row.yhat_lower),
+                yhat_upper=convert_numpy_value(row.yhat_upper),
             )
             for row in forecast_df.itertuples(index=False)
         ]
