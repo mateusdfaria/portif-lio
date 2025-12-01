@@ -98,9 +98,9 @@ jobs:
             --port 8080 \
             --cpu-boost
 
-      - name: Get service URL
+      - name: Get service URL                                                                              mhhhhhh
         id: service-url
-        run: |
+        run: |  
           SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
             --platform managed \
             --region ${{ env.REGION }} \
@@ -141,7 +141,11 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ./frontend
-        run: npm ci --legacy-peer-deps
+        run: |
+          # Instalar dependências (npm install instala devDependencies por padrão)
+          npm install --legacy-peer-deps
+          # Verificar se @vitest/coverage-v8 foi instalado
+          npm list @vitest/coverage-v8 || npm install --save-dev @vitest/coverage-v8 --legacy-peer-deps
 
       - name: Run frontend tests with coverage (>= 25%)
         working-directory: ./frontend

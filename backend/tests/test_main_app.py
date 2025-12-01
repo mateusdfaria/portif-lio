@@ -30,3 +30,4 @@ def test_app_has_cors_middleware_configured():
     assert cors_middlewares, "Deve existir pelo menos um middleware de CORS configurado"
 
 
+

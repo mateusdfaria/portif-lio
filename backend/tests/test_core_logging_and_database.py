@@ -48,3 +48,4 @@ def test_default_database_is_sqlite_and_accepts_queries(tmp_path, monkeypatch):
     assert [row["name"] for row in rows] == ["item-1", "item-2"]
 
 
+
