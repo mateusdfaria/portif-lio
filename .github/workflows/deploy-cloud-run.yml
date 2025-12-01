@@ -55,13 +55,13 @@ jobs:
           PYTHONPATH: backend
         run: |
           pytest backend/tests --maxfail=1 --disable-warnings \
-            --cov=backend.core.config \
-            --cov=backend.core.logging \
-            --cov=backend.core.database \
-            --cov=backend.main \
-            --cov=backend.services.alerts_service \
-            --cov=backend.services.hospital_account_service \
-            --cov=backend.services.prophet_service \
+            --cov=core.config \
+            --cov=core.logging \
+            --cov=core.database \
+            --cov=main \
+            --cov=services.alerts_service \
+            --cov=services.hospital_account_service \
+            --cov=services.prophet_service \
             --cov-report=term-missing \
             --cov-fail-under=75
 
