@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - '.github/workflows/deploy-cloud-run.yml'
   workflow_dispatch:
 
@@ -12,10 +13,12 @@ env:
   PROJECT_ID: hospicast-prod
   SERVICE_NAME: hospicast-backend
   REGION: southamerica-east1
-  IMAGE_NAME: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}
+  BUCKET_NAME: hospicast-frontend
+  IMAGE_NAME: gcr.io/hospicast-prod/hospicast-backend
 
 jobs:
-  deploy:
+  deploy-backend:
+    name: Deploy Backend
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,6 +39,22 @@ jobs:
       - name: Configure Docker for GCR
         run: |
           gcloud auth configure-docker --quiet
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Run backend tests with coverage (>= 75%)
+        env:
+          PYTHONPATH: backend
+        run: |
+          pytest backend/tests --maxfail=1 --disable-warnings --cov=backend --cov-report=term-missing --cov-fail-under=75
 
       - name: Get Cloud SQL connection name
         id: connection-name
@@ -88,7 +107,61 @@ jobs:
       - name: Test deployment
         run: |
           curl -f ${{ steps.service-url.outputs.url }}/ || exit 1
-          echo "✅ Deployment test passed!"
+          echo "✅ Backend deployment test passed!"
 
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Run frontend tests with coverage (>= 25%)
+        working-directory: ./frontend
+        run: npm run test -- --coverage
+
+      - name: Build frontend
+        working-directory: ./frontend
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'https://hospicast-backend-fbuqwglmsq-rj.a.run.app' }}
+        run: npm run build
+
+      - name: Upload to Google Cloud Storage
+        run: |
+          gsutil -m rsync -d -r ./frontend/dist gs://${{ env.BUCKET_NAME }}
+          echo "✅ Frontend uploaded to gs://${{ env.BUCKET_NAME }}"
+
+      - name: Set bucket public access
+        run: |
+          gsutil iam ch allUsers:objectViewer gs://${{ env.BUCKET_NAME }}
+          echo "✅ Bucket set to public"
+
+      - name: Get frontend URL
+        run: |
+          FRONTEND_URL="https://storage.googleapis.com/${{ env.BUCKET_NAME }}/index.html"
+          echo "url=$FRONTEND_URL" >> $GITHUB_OUTPUT
+          echo "Frontend URL: $FRONTEND_URL"
+        id: frontend-url
