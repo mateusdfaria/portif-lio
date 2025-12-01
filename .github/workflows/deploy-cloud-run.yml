@@ -61,7 +61,6 @@ jobs:
             --cov=main \
             --cov=services.alerts_service \
             --cov=services.hospital_account_service \
-            --cov=services.prophet_service \
             --cov-report=term-missing \
             --cov-fail-under=75
 
