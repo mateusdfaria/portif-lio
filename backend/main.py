@@ -86,10 +86,18 @@ logger = configure_logging()
 app = FastAPI(title=settings.api_title, version=settings.api_version)
 
 # CORS configurável (React em 3000 durante desenvolvimento por padrão)
+allowed_origins_list = settings.get_allowed_origins_list()
+logger.info(f"🌐 CORS configurado com origens: {allowed_origins_list}")
+logger.info(f"🌐 API_ALLOWED_ORIGINS (raw): {settings.allowed_origins}")
+
+# Se usar "*", não pode usar allow_credentials=True (restrição do CORS)
+# Se tiver origens específicas, pode usar allow_credentials
+use_credentials = "*" not in allowed_origins_list
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.get_allowed_origins_list(),
-    allow_credentials=True,
+    allow_origins=allowed_origins_list,
+    allow_credentials=use_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

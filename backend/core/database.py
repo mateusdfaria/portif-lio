@@ -34,10 +34,36 @@ def get_database_connection():
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
+            from urllib.parse import urlparse, parse_qs
             
-            # Parse da URL do PostgreSQL
-            # Formato: postgresql://user:password@host:port/database
-            conn = psycopg2.connect(DATABASE_URL)
+            # Parse manual da URL para garantir compatibilidade com Cloud SQL
+            # Formato: postgresql://user:password@host:port/database?param=value
+            # Formato Cloud SQL: postgresql://user:password@/database?host=/cloudsql/CONNECTION_NAME
+            parsed = urlparse(DATABASE_URL)
+            
+            # Extrair credenciais
+            user = parsed.username or ""
+            password = parsed.password or ""
+            database = parsed.path.lstrip("/") or "hospicast"
+            
+            # Extrair parâmetros de query (para Cloud SQL socket)
+            query_params = parse_qs(parsed.query)
+            host = query_params.get("host", [None])[0]
+            port = query_params.get("port", [None])[0] or "5432"
+            
+            # Se host está em query params (Cloud SQL socket), usar parâmetros separados
+            if host and host.startswith("/cloudsql/"):
+                conn = psycopg2.connect(
+                    user=user,
+                    password=password,
+                    database=database,
+                    host=host,
+                    port=port
+                )
+            else:
+                # Conexão normal (host na URL)
+                conn = psycopg2.connect(DATABASE_URL)
+            
             conn.cursor_factory = RealDictCursor
             return conn
         except ImportError:
