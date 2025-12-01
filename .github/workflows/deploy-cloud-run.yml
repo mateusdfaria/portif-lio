@@ -51,15 +51,17 @@ jobs:
           pip install -r backend/requirements-dev.txt
 
       - name: Run backend tests with coverage (>= 75%)
+        env:
+          PYTHONPATH: backend
         run: |
           pytest backend/tests --maxfail=1 --disable-warnings \
-            --cov=backend/core/config.py \
-            --cov=backend/core/logging.py \
-            --cov=backend/core/database.py \
-            --cov=backend/main.py \
-            --cov=backend/services/alerts_service.py \
-            --cov=backend/services/hospital_account_service.py \
-            --cov=backend/services/prophet_service.py \
+            --cov=backend.core.config \
+            --cov=backend.core.logging \
+            --cov=backend.core.database \
+            --cov=backend.main \
+            --cov=backend.services.alerts_service \
+            --cov=backend.services.hospital_account_service \
+            --cov=backend.services.prophet_service \
             --cov-report=term-missing \
             --cov-fail-under=75
 
