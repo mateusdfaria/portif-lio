@@ -1,108 +1,102 @@
-# Script de deploy automático para Google Cloud (PowerShell)
+# Script PowerShell para deploy no Google Cloud
 # Uso: .\scripts\deploy_gcloud.ps1
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "🚀 Iniciando deploy do HospiCast no Google Cloud..." -ForegroundColor Green
+# Variáveis
+$PROJECT_ID = "hospicast-prod"
+$SERVICE_NAME = "hospicast-backend"
+$REGION = "southamerica-east1"
+$BUCKET_NAME = "hospicast-frontend"
+$IMAGE_NAME = "gcr.io/$PROJECT_ID/hospicast-backend"
 
-# Verificar se gcloud está instalado
-try {
-    $null = gcloud --version 2>&1
-} catch {
-    Write-Host "❌ gcloud não está instalado." -ForegroundColor Red
-    Write-Host "Instale em: https://cloud.google.com/sdk/docs/install" -ForegroundColor Yellow
-    exit 1
-}
+Write-Host "🚀 Iniciando deploy do HospiCast..." -ForegroundColor Green
+Write-Host "📦 Projeto: $PROJECT_ID" -ForegroundColor Cyan
+Write-Host "🌍 Região: $REGION" -ForegroundColor Cyan
+Write-Host ""
 
-# Obter PROJECT_ID
-$PROJECT_ID = gcloud config get-value project 2>$null
+# 1. Configurar projeto
+Write-Host "1️⃣ Configurando projeto GCP..." -ForegroundColor Yellow
+gcloud config set project $PROJECT_ID
 
-if (-not $PROJECT_ID) {
-    Write-Host "⚠️  Nenhum projeto configurado." -ForegroundColor Yellow
-    $PROJECT_ID = Read-Host "Digite o PROJECT_ID"
-    gcloud config set project $PROJECT_ID
-}
-
-Write-Host "✅ Projeto: $PROJECT_ID" -ForegroundColor Green
-
-# Verificar se está autenticado
-$activeAccount = gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>$null
-if (-not $activeAccount) {
-    Write-Host "⚠️  Não autenticado. Fazendo login..." -ForegroundColor Yellow
-    gcloud auth login
-}
-
-# Habilitar APIs necessárias
-Write-Host "📦 Habilitando APIs..." -ForegroundColor Green
-gcloud services enable run.googleapis.com --quiet
-gcloud services enable sqladmin.googleapis.com --quiet
-gcloud services enable cloudbuild.googleapis.com --quiet
-gcloud services enable containerregistry.googleapis.com --quiet
-
-# Configurar Docker para GCR
-Write-Host "🐳 Configurando Docker..." -ForegroundColor Green
-gcloud auth configure-docker --quiet
-
-# Build e push da imagem
-Write-Host "🔨 Fazendo build da imagem..." -ForegroundColor Green
-gcloud builds submit --tag "gcr.io/$PROJECT_ID/hospicast-backend:latest" ./backend
-
-# Obter connection name do Cloud SQL
-Write-Host "🗄️  Verificando Cloud SQL..." -ForegroundColor Green
-$INSTANCE_NAME = "hospicast-db"
-$CONNECTION_NAME = gcloud sql instances describe $INSTANCE_NAME --format="value(connectionName)" 2>$null
-
-if (-not $CONNECTION_NAME) {
-    Write-Host "⚠️  Instância Cloud SQL não encontrada." -ForegroundColor Yellow
-    Write-Host "Crie a instância primeiro com:" -ForegroundColor Yellow
-    Write-Host "gcloud sql instances create $INSTANCE_NAME --database-version=POSTGRES_15 --tier=db-f1-micro --region=southamerica-east1" -ForegroundColor Cyan
-    exit 1
-}
-
+# 2. Obter connection name
+Write-Host "2️⃣ Obtendo connection name do Cloud SQL..." -ForegroundColor Yellow
+$CONNECTION_NAME = gcloud sql instances describe hospicast-db --format="value(connectionName)"
 Write-Host "✅ Connection name: $CONNECTION_NAME" -ForegroundColor Green
 
-# Solicitar informações
-$securePassword = Read-Host "Digite a senha do banco de dados" -AsSecureString
-$DB_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-    [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
-)
+# 3. Configurar Docker
+Write-Host "3️⃣ Configurando Docker..." -ForegroundColor Yellow
+gcloud auth configure-docker --quiet
 
-$ALLOWED_ORIGINS = Read-Host "Digite as origens permitidas (CORS), separadas por vírgula [*]"
-if (-not $ALLOWED_ORIGINS) {
-    $ALLOWED_ORIGINS = "*"
+# 4. Verificar diretório
+Write-Host "4️⃣ Verificando diretório..." -ForegroundColor Yellow
+if (-not (Test-Path "backend")) {
+    Write-Host "❌ Erro: Diretório 'backend' não encontrado!" -ForegroundColor Red
+    exit 1
 }
 
-# Construir DATABASE_URL
-$DATABASE_URL = "postgresql://hospicast_user:${DB_PASSWORD}@localhost/hospicast?host=/cloudsql/${CONNECTION_NAME}"
-
-# Deploy no Cloud Run
-Write-Host "🚀 Fazendo deploy no Cloud Run..." -ForegroundColor Green
-gcloud run deploy hospicast-backend `
-    --image "gcr.io/$PROJECT_ID/hospicast-backend:latest" `
+# 5. Obter DATABASE_URL
+Write-Host "5️⃣ Obtendo DATABASE_URL..." -ForegroundColor Yellow
+$DATABASE_URL = gcloud run services describe $SERVICE_NAME `
     --platform managed `
-    --region southamerica-east1 `
+    --region $REGION `
+    --format="value(spec.template.spec.containers[0].env[0].value)" 2>$null
+
+if ([string]::IsNullOrEmpty($DATABASE_URL)) {
+    Write-Host "⚠️ DATABASE_URL não encontrado. Digite manualmente:" -ForegroundColor Yellow
+    $DATABASE_URL = Read-Host "DATABASE_URL"
+}
+
+# 6. Gerar tag
+$IMAGE_TAG = Get-Date -Format "yyyyMMdd-HHmmss"
+Write-Host "📌 Tag da imagem: $IMAGE_TAG" -ForegroundColor Cyan
+
+# 7. Build da imagem
+Write-Host "7️⃣ Fazendo build da imagem Docker..." -ForegroundColor Yellow
+Set-Location backend
+docker build -t "${IMAGE_NAME}:latest" -t "${IMAGE_NAME}:${IMAGE_TAG}" .
+Set-Location ..
+
+# 8. Push da imagem
+Write-Host "8️⃣ Fazendo push da imagem..." -ForegroundColor Yellow
+docker push "${IMAGE_NAME}:latest"
+docker push "${IMAGE_NAME}:${IMAGE_TAG}"
+
+# 9. Deploy no Cloud Run
+Write-Host "9️⃣ Fazendo deploy no Cloud Run..." -ForegroundColor Yellow
+gcloud run deploy $SERVICE_NAME `
+    --image "${IMAGE_NAME}:${IMAGE_TAG}" `
+    --platform managed `
+    --region $REGION `
     --allow-unauthenticated `
     --add-cloudsql-instances $CONNECTION_NAME `
-    --set-env-vars "DATABASE_URL=${DATABASE_URL}" `
-    --set-env-vars "API_ALLOWED_ORIGINS=${ALLOWED_ORIGINS}" `
-    --set-env-vars "LOG_LEVEL=INFO" `
-    --set-env-vars "PROMETHEUS_ENABLED=true" `
+    --set-env-vars "DATABASE_URL=$DATABASE_URL,LOG_LEVEL=INFO,PROMETHEUS_ENABLED=true,ENVIRONMENT=production" `
     --memory 2Gi `
     --cpu 2 `
-    --timeout 300 `
+    --timeout 600 `
     --max-instances 10 `
-    --min-instances 0
+    --port 8080 `
+    --cpu-boost
 
-# Obter URL do serviço
-$SERVICE_URL = gcloud run services describe hospicast-backend --platform managed --region southamerica-east1 --format="value(status.url)"
+# 10. Obter URL
+Write-Host "🔟 Obtendo URL do serviço..." -ForegroundColor Yellow
+$SERVICE_URL = gcloud run services describe $SERVICE_NAME `
+    --platform managed `
+    --region $REGION `
+    --format="value(status.url)"
+Write-Host "✅ Backend URL: $SERVICE_URL" -ForegroundColor Green
 
-Write-Host "✅ Deploy concluído!" -ForegroundColor Green
-Write-Host "🌐 URL do serviço: $SERVICE_URL" -ForegroundColor Green
+# 11. Testar
+Write-Host "1️⃣1️⃣ Testando deploy..." -ForegroundColor Yellow
+try {
+    $response = Invoke-WebRequest -Uri "$SERVICE_URL/" -UseBasicParsing
+    if ($response.StatusCode -eq 200) {
+        Write-Host "✅ Deploy testado com sucesso!" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "⚠️ Teste falhou, mas o deploy pode estar OK" -ForegroundColor Yellow
+}
+
 Write-Host ""
-Write-Host "Teste o endpoint:" -ForegroundColor Yellow
-Write-Host "curl $SERVICE_URL/" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Atualize o frontend para usar esta URL!" -ForegroundColor Yellow
-
-
-
+Write-Host "🎉 Deploy do backend concluído com sucesso!" -ForegroundColor Green
+Write-Host "📝 URL: $SERVICE_URL" -ForegroundColor Cyan

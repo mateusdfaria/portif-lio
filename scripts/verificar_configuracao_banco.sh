@@ -84,3 +84,4 @@ echo "   1. Se a senha está incorreta, use: ./scripts/corrigir_database_url.sh"
 echo "   2. Se o problema é conexão, verifique os logs detalhados"
 echo "   3. Considere implementar reconnect automático"
 
+

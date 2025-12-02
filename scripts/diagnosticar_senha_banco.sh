@@ -103,3 +103,4 @@ echo "   1. Se a senha expirou, use: ./scripts/corrigir_database_url.sh"
 echo "   2. Se o problema persistir, verifique logs detalhados"
 echo "   3. Considere implementar reconnect automático (veja PROBLEMA_SENHA_BANCO_TEMPO.md)"
 
+

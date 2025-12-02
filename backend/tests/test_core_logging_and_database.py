@@ -49,3 +49,4 @@ def test_default_database_is_sqlite_and_accepts_queries(tmp_path, monkeypatch):
 
 
 
+

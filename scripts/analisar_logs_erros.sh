@@ -70,3 +70,4 @@ else
   echo "   ✅ Número de reinicializações parece normal"
 fi
 
+

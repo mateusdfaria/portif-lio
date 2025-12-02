@@ -145,6 +145,9 @@ portif-lio/
 ├── docs/                  # Documentação
 │   └── ...
 │
+├── teste_comparativo_2022.csv  # Dados históricos para treinamento
+├── real.csv                    # Dados reais para comparação
+│
 └── README.md              # Este arquivo
 ```
 
@@ -271,6 +274,145 @@ Após o deploy, o sistema estará disponível em:
 - **API Documentation**: https://hospicast-backend-fbuqwglmsq-rj.a.run.app/docs
 
 > 💡 **Nota**: Para trocar essas URLs, edite os arquivos de configuração ou use domínios personalizados no Google Cloud
+
+---
+
+## 📊 Arquivos de Dados para Testes
+
+O projeto inclui arquivos de exemplo para testar as funcionalidades de previsão e comparação:
+
+### 📁 Arquivos Disponíveis
+
+1. **`teste_comparativo_2022.csv`** - Dados históricos para treinamento e previsão
+   - **Formato**: CSV com colunas `ds` (data) e `y` (valor)
+   - **Separador**: `;` (ponto e vírgula)
+   - **Uso**: Treinar modelos e gerar previsões
+
+2. **`real.csv`** - Dados reais para comparação
+   - **Formato**: CSV com colunas `ds` (data) e `y` (valor real)
+   - **Separador**: `;` (ponto e vírgula)
+   - **Uso**: Comparar previsões geradas com valores reais
+
+### 🔄 Fluxo de Uso
+
+#### 1️⃣ Gerar Previsão (usando `teste_comparativo_2022.csv`)
+
+**Opção A: Via API (treinar e prever)**
+
+```bash
+# 1. Treinar modelo com dados históricos
+curl -X POST "http://127.0.0.1:8001/forecast/train-external" \
+  -F "series_id=hospital_joinville_2022" \
+  -F "latitude=-26.3044" \
+  -F "longitude=-48.8464" \
+  -F "start=2021-01-01" \
+  -F "end=2022-12-31" \
+  -F "file=@teste_comparativo_2022.csv"
+
+# 2. Gerar previsão usando o series_id retornado
+curl -X POST "http://127.0.0.1:8001/forecast/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "series_id": "hospital_joinville_2022",
+    "horizon": 14,
+    "latitude": -26.3044,
+    "longitude": -48.8464
+  }'
+```
+
+**Opção B: Via Interface Web**
+
+1. Acesse a interface em `http://localhost:5173`
+2. Vá para a seção de **Previsão**
+3. Faça upload do arquivo `teste_comparativo_2022.csv`
+4. Configure os parâmetros (latitude, longitude, horizonte)
+5. Clique em **Gerar Previsão**
+6. **Anote o `series_id` retornado** (ex: `hospital_joinville_2022`)
+
+#### 2️⃣ Comparar Previsões (usando `real.csv`)
+
+Após gerar a previsão, você receberá um `series_id`. Use este ID junto com o arquivo `real.csv` para comparar as previsões com os valores reais:
+
+**Via API:**
+
+```bash
+curl -X POST "http://127.0.0.1:8001/forecast/compare-predictions" \
+  -F "series_id=hospital_joinville_2022" \
+  -F "file=@real.csv" \
+  -F "start_date=2025-11-01" \
+  -F "end_date=2025-11-14"
+```
+
+**Via Interface Web:**
+
+1. Acesse a seção **Comparação de Previsões**
+2. Informe o `series_id` da previsão gerada anteriormente
+3. Faça upload do arquivo `real.csv` com os valores reais
+4. (Opcional) Informe as datas inicial e final do período
+5. Clique em **Comparar**
+
+### 📋 Formato dos Arquivos CSV
+
+Ambos os arquivos devem seguir o formato:
+
+```csv
+ds;y
+2021-01-01;102
+2021-01-02;115
+2021-01-03;127
+...
+```
+
+**Colunas obrigatórias:**
+- `ds`: Data no formato `YYYY-MM-DD`
+- `y`: Valor numérico (ex: número de pacientes)
+
+**Separadores suportados:**
+- `;` (ponto e vírgula) - **Recomendado**
+- `,` (vírgula)
+
+### 💡 Exemplo Completo
+
+```bash
+# 1. Treinar modelo
+curl -X POST "http://127.0.0.1:8001/forecast/train-external" \
+  -F "series_id=meu_teste" \
+  -F "latitude=-26.3044" \
+  -F "longitude=-48.8464" \
+  -F "start=2021-01-01" \
+  -F "end=2022-12-31" \
+  -F "file=@teste_comparativo_2022.csv"
+
+# Resposta: {"status": "ok", "series_id": "meu_teste"}
+
+# 2. Gerar previsão
+curl -X POST "http://127.0.0.1:8001/forecast/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "series_id": "meu_teste",
+    "horizon": 14,
+    "latitude": -26.3044,
+    "longitude": -48.8464
+  }'
+
+# Resposta: { "forecast": [...], "insights": [...], "series_id": "meu_teste" }
+
+# 3. Comparar com valores reais
+curl -X POST "http://127.0.0.1:8001/forecast/compare-predictions" \
+  -F "series_id=meu_teste" \
+  -F "file=@real.csv"
+
+# Resposta: { "comparison_data": [...], "metrics": {...} }
+```
+
+### ⚠️ Importante
+
+- O `series_id` é criado automaticamente quando você treina um modelo
+- Use o mesmo `series_id` para gerar previsões e comparar com dados reais
+- O arquivo `real.csv` deve conter valores reais para as **mesmas datas** das previsões geradas
+- As datas no `real.csv` devem corresponder ao período previsto
+
+> 📚 **Para mais detalhes**, consulte o [Guia Completo de Arquivos de Teste](docs/GUIA_ARQUIVOS_TESTE.md)
 
 ---
 

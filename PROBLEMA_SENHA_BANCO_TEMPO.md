@@ -403,3 +403,4 @@ curl https://hospicast-backend-fbuqwglmsq-rj.a.run.app/
 
 **💡 Dica**: Se o problema persistir, implemente o pool de conexões com reconnect automático (Solução Definitiva acima).
 
+

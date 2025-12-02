@@ -147,3 +147,4 @@ Se mesmo com o reconnect automático ainda houver erros:
 
 **🎉 Pronto! O problema de senha após tempo deve estar resolvido!**
 
+
