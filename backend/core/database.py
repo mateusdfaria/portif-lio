@@ -199,11 +199,12 @@ def execute_query(query: str, params: tuple | dict | None = None) -> Any:
             if _postgresql_pool and not _postgresql_pool.closed:
                 try:
                     _postgresql_pool.putconn(conn)
-                except Exception:
+                except (AttributeError, TypeError):
                     # Se houver erro ao devolver, fechar a conexão
                     try:
                         conn.close()
-                    except Exception:
+                    except Exception:  # pylint: disable=broad-except
+                        # Ignorar erros ao fechar conexão já fechada
                         pass
         else:
             conn.close()

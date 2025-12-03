@@ -1,4 +1,5 @@
 import io
+import logging
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ from services.prophet_service import (
 from services.weather_service import weather_service
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
+logger = logging.getLogger("hospicast")
 
 
 def decode_file_bytes(raw_bytes: bytes) -> str:
@@ -143,10 +145,11 @@ async def train_file(series_id: str = Form(...), file: UploadFile = File(...)):
         return {"status": "ok", "series_id": series_id, "rows": len(dataframe)}
     except HTTPException:
         raise
+    except (ValueError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+        logger.error("Erro ao processar arquivo CSV: %s", exc, exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Erro ao processar arquivo: {str(exc)}")
     except Exception as exc:  # pragma: no cover - defensive guard
-        import traceback
-        error_detail = f"{str(exc)}\n{traceback.format_exc()}"
-        print(f"❌ Erro completo ao treinar: {error_detail}")
+        logger.exception("Erro inesperado ao treinar modelo")
         raise HTTPException(status_code=500, detail=f"Erro ao processar arquivo: {str(exc)}")
 
 
@@ -218,7 +221,7 @@ async def predict(request: PredictRequest) -> ForecastResponse:
             hist_end = start_date - timedelta(days=1)
             
             try:
-                print(f"🌤️  Buscando dados climáticos para {request.horizon} dias...")
+                logger.info("Buscando dados climáticos para %d dias", request.horizon)
                 
                 # Buscar previsão do tempo aprimorada
                 weather_df, weather_insights = weather_service.get_enhanced_weather_forecast(
@@ -226,16 +229,16 @@ async def predict(request: PredictRequest) -> ForecastResponse:
                     request.longitude, 
                     request.horizon
                 )
-                print(f"🌤️  Dados climáticos aprimorados: {len(weather_df) if weather_df is not None else 0} registros")
-                print(f"📊 Insights climáticos: {len(weather_insights)} encontrados")
+                logger.info("Dados climáticos aprimorados: %d registros", len(weather_df) if weather_df is not None else 0)
+                logger.info("Insights climáticos: %d encontrados", len(weather_insights))
                 
                 # Buscar feriados aprimorados
-                print("🎉 Buscando feriados aprimorados para o período...")
+                logger.info("Buscando feriados aprimorados para o período")
                 holidays_df, holiday_insights = holidays_service.create_enhanced_holiday_regressor(
                     pd.Timestamp(start_date),
                     pd.Timestamp(end_date)
                 )
-                print(f"📊 Insights de feriados: {len(holiday_insights)} encontrados")
+                logger.info("Insights de feriados: %d encontrados", len(holiday_insights))
                 
                 # Criar DataFrame de regressores futuros com tamanho exato
                 future_regs_df = pd.DataFrame({
@@ -335,12 +338,12 @@ async def predict(request: PredictRequest) -> ForecastResponse:
                     future_regs_df = future_regs_df.head(request.horizon)
                 
                 # Verificar e corrigir valores NaN
-                print("🔍 Verificando NaN antes da correção:")
+                logger.debug("Verificando NaN antes da correção")
                 nan_columns = future_regs_df.columns[future_regs_df.isnull().any()].tolist()
                 if nan_columns:
-                    print(f"⚠️  Colunas com NaN: {nan_columns}")
+                    logger.warning("Colunas com NaN: %s", nan_columns)
                     for col in nan_columns:
-                        print(f"   {col}: {future_regs_df[col].isnull().sum()} valores NaN")
+                        logger.debug("%s: %d valores NaN", col, future_regs_df[col].isnull().sum())
                         # Preencher NaN com valores padrão
                         if col in ['is_winter', 'is_summer', 'is_holiday', 'is_extraordinary_event', 'is_holiday_weekend', 'is_holiday_monday']:
                             future_regs_df[col] = future_regs_df[col].fillna(0)
@@ -353,11 +356,11 @@ async def predict(request: PredictRequest) -> ForecastResponse:
                         else:
                             future_regs_df[col] = future_regs_df[col].fillna(0)
                 
-                print(f"✅ Regressores criados: {list(future_regs_df.columns)}")
-                print(f"📊 Tamanho do DataFrame: {len(future_regs_df)} linhas, horizonte: {request.horizon}")
+                logger.debug("Regressores criados: %s", list(future_regs_df.columns))
+                logger.debug("Tamanho do DataFrame: %d linhas, horizonte: %d", len(future_regs_df), request.horizon)
                 
             except Exception as e:
-                print(f"⚠️  Erro ao buscar dados climáticos: {e}")
+                logger.warning("Erro ao buscar dados climáticos: %s", e)
                 # Se falhar, criar regressores básicos sem clima
                 future_regs_df = pd.DataFrame({
                     "ds": pd.date_range(start=start_date, periods=request.horizon, freq="D")
@@ -376,11 +379,11 @@ async def predict(request: PredictRequest) -> ForecastResponse:
                 future_regs_df["is_summer"] = 0
                 future_regs_df["is_holiday"] = 0
 
-        print(f"🔍 Debug - Horizon: {request.horizon}")
-        print(f"🔍 Debug - Future regressors shape: {future_regs_df.shape if future_regs_df is not None else 'None'}")
+        logger.debug("Horizon: %d", request.horizon)
+        logger.debug("Future regressors shape: %s", future_regs_df.shape if future_regs_df is not None else 'None')
         if future_regs_df is not None:
-            print(f"🔍 Debug - Future regressors columns: {list(future_regs_df.columns)}")
-            print(f"🔍 Debug - Future regressors head:\n{future_regs_df.head()}")
+            logger.debug("Future regressors columns: %s", list(future_regs_df.columns))
+            logger.debug("Future regressors head: %s", future_regs_df.head())
 
         forecast_df = generate_forecast(series_id=request.series_id, horizon=request.horizon, future_regressors=future_regs_df)
         
@@ -401,10 +404,10 @@ async def predict(request: PredictRequest) -> ForecastResponse:
             
             # Formatar insights para o frontend
             formatted_insights = insights_service.format_insights_for_frontend(all_insights)
-            print(f"📊 Total de insights gerados: {formatted_insights['total_insights']}")
+            logger.info("Total de insights gerados: %d", formatted_insights['total_insights'])
             
         except Exception as e:
-            print(f"⚠️  Erro ao gerar insights: {e}")
+            logger.warning("Erro ao gerar insights: %s", e)
             formatted_insights = {"total_insights": 0, "insights": []}
         
         # Converter valores numpy para tipos Python nativos antes de criar ForecastPoint
@@ -484,7 +487,7 @@ async def train_with_external(
         text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
-        except Exception:
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
             text_stream.seek(0)
             df = pd.read_csv(text_stream, sep=";")
 
@@ -571,7 +574,7 @@ async def backtest_model(
         text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
-        except Exception:
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
             text_stream.seek(0)
             df = pd.read_csv(text_stream, sep=";")
 
@@ -580,12 +583,12 @@ async def backtest_model(
 
         # Executar backtesting
         if use_prophet_cv:
-            print("🔄 Usando Prophet cross_validation nativo...")
+            logger.info("Usando Prophet cross_validation nativo")
             results = backtesting_service.prophet_cross_validation(
                 df, initial_days, horizon_days, period_days
             )
         else:
-            print("🔄 Usando validação cruzada manual...")
+            logger.info("Usando validação cruzada manual")
             results = backtesting_service.rolling_cross_validation(
                 df, initial_days, horizon_days, period_days
             )
@@ -641,7 +644,7 @@ async def grid_search_parameters(
         text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
-        except Exception:
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
             text_stream.seek(0)
             df = pd.read_csv(text_stream, sep=";")
 
@@ -723,7 +726,7 @@ async def evaluate_baselines(
         text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
-        except Exception:
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
             text_stream.seek(0)
             df = pd.read_csv(text_stream, sep=";")
 
@@ -735,19 +738,19 @@ async def evaluate_baselines(
         df = df.sort_values('ds').reset_index(drop=True)
         
         # Avaliar baselines
-        print(f"🔍 Debug - Avaliando baselines para horizonte {horizon}")
-        print(f"🔍 Debug - Dados: {len(df)} linhas, período: {df['ds'].min()} a {df['ds'].max()}")
+        logger.debug("Avaliando baselines para horizonte %d", horizon)
+        logger.debug("Dados: %d linhas, período: %s a %s", len(df), df['ds'].min(), df['ds'].max())
         
         if use_cross_validation:
-            print("🔍 Debug - Usando validação cruzada")
+            logger.debug("Usando validação cruzada")
             results = baseline_service.compare_all_baselines(
                 df, horizon, use_cross_validation=True
             )
         else:
-            print("🔍 Debug - Usando avaliação simples")
+            logger.debug("Usando avaliação simples")
             results = baseline_service.compare_all_baselines(df, horizon)
         
-        print(f"🔍 Debug - Resultados obtidos: {len(results) if results else 0}")
+        logger.debug("Resultados obtidos: %d", len(results) if results else 0)
         
         if not results:
             raise HTTPException(status_code=400, detail="Nenhum baseline avaliado com sucesso")
@@ -909,11 +912,11 @@ async def compare_predictions(
         }
     except HTTPException:
         raise
+    except (ValueError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+        logger.error("Erro ao processar dados para comparação: %s", exc, exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Erro ao processar dados: {str(exc)}")
     except Exception as exc:
-        import traceback
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Erro ao comparar previsões: {exc}\n{traceback.format_exc()}")
+        logger.exception("Erro inesperado ao comparar previsões")
         raise HTTPException(status_code=500, detail=f"Erro ao comparar previsões: {str(exc)}")
 
 
@@ -931,7 +934,7 @@ async def calculate_metrics(
         text_stream = io.StringIO(decode_file_bytes(raw_bytes))
         try:
             df = pd.read_csv(text_stream)
-        except Exception:
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
             text_stream.seek(0)
             df = pd.read_csv(text_stream, sep=";")
 

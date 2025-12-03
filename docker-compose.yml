@@ -6,16 +6,16 @@ services:
     image: postgres:15-alpine
     container_name: hospicast_postgres
     environment:
-      POSTGRES_DB: hospicast
-      POSTGRES_USER: hospicast_user
-      POSTGRES_PASSWORD: hospicast_password
+      POSTGRES_DB: ${POSTGRES_DB:-hospicast}
+      POSTGRES_USER: ${POSTGRES_USER:-hospicast_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hospicast_user -d hospicast"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hospicast_user} -d ${POSTGRES_DB:-hospicast}"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -45,7 +45,7 @@ services:
       dockerfile: Dockerfile
     container_name: hospicast_backend
     environment:
-      - DATABASE_URL=postgresql://hospicast_user:hospicast_password@postgres:5432/hospicast
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-hospicast_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hospicast}
       - REDIS_URL=redis://redis:6379
       - ENVIRONMENT=production
       - PYTHONPATH=/app

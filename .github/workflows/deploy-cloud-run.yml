@@ -100,7 +100,7 @@ jobs:
 
       - name: Get service URL                                                                              mhhhhhh
         id: service-url
-        run: |  
+        run: |
           SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
             --platform managed \
             --region ${{ env.REGION }} \
