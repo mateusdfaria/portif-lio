@@ -30,6 +30,246 @@ router = APIRouter(prefix="/forecast", tags=["forecast"])
 logger = logging.getLogger("hospicast")
 
 
+def _ensure_dataframe_size(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """Garante que o DataFrame tenha exatamente o tamanho do horizonte."""
+    if len(df) >= horizon:
+        return df.head(horizon)
+    
+    # Se não tiver dados suficientes, duplicar o último
+    last_row = df.iloc[-1].copy()
+    while len(df) < horizon:
+        df = pd.concat([df, last_row.to_frame().T], ignore_index=True)
+    return df.head(horizon)
+
+
+def _fill_default_weather_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Preenche valores padrão para variáveis climáticas."""
+    df["tmax"] = df.get("tmax", 25.0)
+    df["tmin"] = df.get("tmin", 15.0)
+    df["precip"] = df.get("precip", 0.0)
+    df["temp_avg"] = df.get("temp_avg", 20.0)
+    df["temp_range"] = df.get("temp_range", 10.0)
+    df["thermal_comfort"] = df.get("thermal_comfort", 1)
+    df["respiratory_risk"] = df.get("respiratory_risk", 0)
+    df["dehydration_risk"] = df.get("dehydration_risk", 0)
+    df["accident_risk"] = df.get("accident_risk", 0)
+    df["month"] = df.get("month", 1)
+    df["is_winter"] = df.get("is_winter", 0)
+    df["is_summer"] = df.get("is_summer", 0)
+    return df.fillna({
+        "tmax": 25.0,
+        "tmin": 15.0,
+        "precip": 0.0,
+        "temp_avg": 20.0,
+        "temp_range": 10.0,
+        "thermal_comfort": 1,
+        "respiratory_risk": 0,
+        "dehydration_risk": 0,
+        "accident_risk": 0,
+        "month": 1,
+        "is_winter": 0,
+        "is_summer": 0,
+    })
+
+
+def _fill_default_holiday_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Preenche valores padrão para variáveis de feriados."""
+    df["is_holiday"] = df.get("is_holiday", 0)
+    df["is_extraordinary_event"] = df.get("is_extraordinary_event", 0)
+    df["event_impact_factor"] = df.get("event_impact_factor", 1.0)
+    df["is_holiday_weekend"] = df.get("is_holiday_weekend", 0)
+    df["is_holiday_monday"] = df.get("is_holiday_monday", 0)
+    return df.fillna({
+        "is_holiday": 0,
+        "is_extraordinary_event": 0,
+        "event_impact_factor": 1.0,
+        "is_holiday_weekend": 0,
+        "is_holiday_monday": 0,
+    })
+
+
+def _fix_nan_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Corrige valores NaN no DataFrame."""
+    nan_columns = df.columns[df.isnull().any()].tolist()
+    if not nan_columns:
+        return df
+    
+    logger.warning("Colunas com NaN: %s", nan_columns)
+    for col in nan_columns:
+        logger.debug("%s: %d valores NaN", col, df[col].isnull().sum())
+        
+        if col in ['is_winter', 'is_summer', 'is_holiday', 'is_extraordinary_event', 
+                   'is_holiday_weekend', 'is_holiday_monday']:
+            df[col] = df[col].fillna(0)
+        elif col in ['thermal_comfort', 'respiratory_risk', 'dehydration_risk', 'accident_risk']:
+            df[col] = df[col].fillna(0)
+        elif col == 'month':
+            df[col] = df[col].fillna(1)
+        elif col == 'event_impact_factor':
+            df[col] = df[col].fillna(1.0)
+        else:
+            df[col] = df[col].fillna(0)
+    
+    return df
+
+
+def _create_default_regressors(start_date: pd.Timestamp, horizon: int) -> pd.DataFrame:
+    """Cria regressores padrão quando não há dados externos."""
+    df = pd.DataFrame({
+        "ds": pd.date_range(start=start_date, periods=horizon, freq="D")
+    })
+    df["tmax"] = 25.0
+    df["tmin"] = 15.0
+    df["precip"] = 0.0
+    df["temp_avg"] = 20.0
+    df["temp_range"] = 10.0
+    df["thermal_comfort"] = 1
+    df["respiratory_risk"] = 0
+    df["dehydration_risk"] = 0
+    df["accident_risk"] = 0
+    df["month"] = 1
+    df["is_winter"] = 0
+    df["is_summer"] = 0
+    df["is_holiday"] = 0
+    return df
+
+
+def _prepare_weather_regressors(
+    latitude: float,
+    longitude: float,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    horizon: int
+) -> tuple[pd.DataFrame | None, list]:
+    """Prepara regressores climáticos."""
+    try:
+        logger.info("Buscando dados climáticos para %d dias", horizon)
+        weather_df, weather_insights = weather_service.get_enhanced_weather_forecast(
+            latitude, longitude, horizon
+        )
+        logger.info("Dados climáticos aprimorados: %d registros", 
+                   len(weather_df) if weather_df is not None else 0)
+        logger.info("Insights climáticos: %d encontrados", len(weather_insights))
+        return weather_df, weather_insights
+    except Exception as e:
+        logger.warning("Erro ao buscar dados climáticos: %s", e)
+        return None, []
+
+
+def _prepare_holiday_regressors(
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp
+) -> tuple[pd.DataFrame | None, list]:
+    """Prepara regressores de feriados."""
+    try:
+        logger.info("Buscando feriados aprimorados para o período")
+        holidays_df, holiday_insights = holidays_service.create_enhanced_holiday_regressor(
+            start_date, end_date
+        )
+        logger.info("Insights de feriados: %d encontrados", len(holiday_insights))
+        return holidays_df, holiday_insights
+    except Exception as e:
+        logger.warning("Erro ao buscar feriados: %s", e)
+        return None, []
+
+
+def _build_future_regressors(
+    latitude: float,
+    longitude: float,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    horizon: int
+) -> tuple[pd.DataFrame, list, list]:
+    """Constrói DataFrame de regressores futuros com clima e feriados."""
+    # Buscar dados externos
+    weather_df, weather_insights = _prepare_weather_regressors(
+        latitude, longitude, start_date, end_date, horizon
+    )
+    holidays_df, holiday_insights = _prepare_holiday_regressors(start_date, end_date)
+    
+    # Criar DataFrame base
+    future_regs_df = pd.DataFrame({
+        "ds": pd.date_range(start=start_date, periods=horizon, freq="D")
+    })
+    
+    # Adicionar dados climáticos
+    if weather_df is not None and not weather_df.empty:
+        weather_df = _ensure_dataframe_size(weather_df, horizon)
+        future_regs_df = future_regs_df.merge(weather_df, on="ds", how="left")
+        future_regs_df = _fill_default_weather_values(future_regs_df)
+    else:
+        future_regs_df = _fill_default_weather_values(future_regs_df)
+    
+    # Adicionar feriados
+    if holidays_df is not None and not holidays_df.empty:
+        holidays_df = _ensure_dataframe_size(holidays_df, horizon)
+        future_regs_df = future_regs_df.merge(holidays_df, on="ds", how="left")
+        future_regs_df = _fill_default_holiday_values(future_regs_df)
+    else:
+        future_regs_df = _fill_default_holiday_values(future_regs_df)
+    
+    # Garantir tamanho correto e corrigir NaN
+    future_regs_df = future_regs_df.head(horizon)
+    future_regs_df = _fix_nan_values(future_regs_df)
+    
+    logger.debug("Regressores criados: %s", list(future_regs_df.columns))
+    logger.debug("Tamanho do DataFrame: %d linhas, horizonte: %d", len(future_regs_df), horizon)
+    
+    return future_regs_df, weather_insights, holiday_insights
+
+
+def _convert_numpy_value(value) -> float | int | None:
+    """Converte valores numpy para tipos Python nativos."""
+    if pd.isna(value):
+        return None
+    if hasattr(value, 'item'):
+        return value.item()
+    if isinstance(value, (np.integer, np.int64, np.int32)):
+        return int(value)
+    if isinstance(value, (np.floating, np.float64, np.float32)):
+        return float(value)
+    return float(value) if value is not None else None
+
+
+def _generate_insights(
+    forecast_df: pd.DataFrame,
+    weather_insights: list,
+    holiday_insights: list
+) -> dict:
+    """Gera insights derivados da previsão."""
+    try:
+        all_insights = []
+        all_insights.extend(weather_insights)
+        all_insights.extend(holiday_insights)
+        
+        forecast_insights = insights_service.generate_forecast_insights(
+            forecast_df=forecast_df,
+            weather_insights=weather_insights,
+            holiday_insights=holiday_insights
+        )
+        all_insights.extend(forecast_insights)
+        
+        formatted_insights = insights_service.format_insights_for_frontend(all_insights)
+        logger.info("Total de insights gerados: %d", formatted_insights['total_insights'])
+        return formatted_insights
+    except Exception as e:
+        logger.warning("Erro ao gerar insights: %s", e)
+        return {"total_insights": 0, "insights": []}
+
+
+def _convert_forecast_to_points(forecast_df: pd.DataFrame) -> list[ForecastPoint]:
+    """Converte DataFrame de previsão para lista de ForecastPoint."""
+    return [
+        ForecastPoint(
+            ds=str(row.ds),
+            yhat=_convert_numpy_value(row.yhat),
+            yhat_lower=_convert_numpy_value(row.yhat_lower),
+            yhat_upper=_convert_numpy_value(row.yhat_upper),
+        )
+        for row in forecast_df.itertuples(index=False)
+    ]
+
+
 def decode_file_bytes(raw_bytes: bytes) -> str:
     """Decodifica bytes de arquivo tentando múltiplos encodings.
     
@@ -206,232 +446,46 @@ async def predict_ensemble(request: PredictRequest):
 
 @router.post("/predict", response_model=ForecastResponse)
 async def predict(request: PredictRequest) -> ForecastResponse:
+    """Gera previsão usando modelo Prophet com regressores externos."""
     try:
         future_regs_df = None
-        # Habilitar regressores externos com os novos serviços
+        weather_insights = []
+        holiday_insights = []
+        
+        # Habilitar regressores externos se coordenadas fornecidas
         if request.latitude is not None and request.longitude is not None:
-            # tentar obter regressors para os próximos 'horizon' dias a partir de hoje
             from datetime import timedelta
             start_date = pd.Timestamp.today().normalize().date()
             end_date = start_date + timedelta(days=request.horizon - 1)
             
-            # Como Open-Meteo não tem dados futuros, usar dados históricos recentes como aproximação
-            # Buscar dados dos últimos 30 dias como base para o futuro
-            hist_start = start_date - timedelta(days=30)
-            hist_end = start_date - timedelta(days=1)
-            
             try:
-                logger.info("Buscando dados climáticos para %d dias", request.horizon)
-                
-                # Buscar previsão do tempo aprimorada
-                weather_df, weather_insights = weather_service.get_enhanced_weather_forecast(
-                    request.latitude, 
-                    request.longitude, 
+                future_regs_df, weather_insights, holiday_insights = _build_future_regressors(
+                    request.latitude,
+                    request.longitude,
+                    pd.Timestamp(start_date),
+                    pd.Timestamp(end_date),
                     request.horizon
                 )
-                logger.info("Dados climáticos aprimorados: %d registros", len(weather_df) if weather_df is not None else 0)
-                logger.info("Insights climáticos: %d encontrados", len(weather_insights))
-                
-                # Buscar feriados aprimorados
-                logger.info("Buscando feriados aprimorados para o período")
-                holidays_df, holiday_insights = holidays_service.create_enhanced_holiday_regressor(
-                    pd.Timestamp(start_date),
-                    pd.Timestamp(end_date)
-                )
-                logger.info("Insights de feriados: %d encontrados", len(holiday_insights))
-                
-                # Criar DataFrame de regressores futuros com tamanho exato
-                future_regs_df = pd.DataFrame({
-                    "ds": pd.date_range(start=start_date, periods=request.horizon, freq="D")
-                })
-                
-                # Adicionar dados climáticos
-                if weather_df is not None and not weather_df.empty:
-                    # Garantir que weather_df tenha exatamente o horizonte
-                    if len(weather_df) >= request.horizon:
-                        weather_df = weather_df.head(request.horizon)
-                    else:
-                        # Se não tiver dados suficientes, duplicar o último
-                        last_row = weather_df.iloc[-1].copy()
-                        while len(weather_df) < request.horizon:
-                            weather_df = pd.concat([weather_df, last_row.to_frame().T], ignore_index=True)
-                        weather_df = weather_df.head(request.horizon)
-                    
-                    future_regs_df = future_regs_df.merge(
-                        weather_df, 
-                        on="ds", 
-                        how="left"
-                    )
-                    # Preencher valores faltantes com médias para todas as variáveis climáticas
-                    future_regs_df["tmax"] = future_regs_df["tmax"].fillna(25.0)
-                    future_regs_df["tmin"] = future_regs_df["tmin"].fillna(15.0)
-                    future_regs_df["precip"] = future_regs_df["precip"].fillna(0.0)
-                    # Preencher variáveis derivadas se existirem
-                    if "temp_avg" in future_regs_df.columns:
-                        future_regs_df["temp_avg"] = future_regs_df["temp_avg"].fillna(20.0)
-                    if "temp_range" in future_regs_df.columns:
-                        future_regs_df["temp_range"] = future_regs_df["temp_range"].fillna(10.0)
-                    if "thermal_comfort" in future_regs_df.columns:
-                        future_regs_df["thermal_comfort"] = future_regs_df["thermal_comfort"].fillna(1)
-                    if "respiratory_risk" in future_regs_df.columns:
-                        future_regs_df["respiratory_risk"] = future_regs_df["respiratory_risk"].fillna(0)
-                    if "dehydration_risk" in future_regs_df.columns:
-                        future_regs_df["dehydration_risk"] = future_regs_df["dehydration_risk"].fillna(0)
-                    if "accident_risk" in future_regs_df.columns:
-                        future_regs_df["accident_risk"] = future_regs_df["accident_risk"].fillna(0)
-                    if "month" in future_regs_df.columns:
-                        future_regs_df["month"] = future_regs_df["month"].fillna(1)
-                    if "is_winter" in future_regs_df.columns:
-                        future_regs_df["is_winter"] = future_regs_df["is_winter"].fillna(0)
-                    if "is_summer" in future_regs_df.columns:
-                        future_regs_df["is_summer"] = future_regs_df["is_summer"].fillna(0)
-                else:
-                    # Valores padrão se não conseguir buscar dados climáticos
-                    future_regs_df["tmax"] = 25.0
-                    future_regs_df["tmin"] = 15.0
-                    future_regs_df["precip"] = 0.0
-                    future_regs_df["temp_avg"] = 20.0
-                    future_regs_df["temp_range"] = 10.0
-                    future_regs_df["thermal_comfort"] = 1
-                    future_regs_df["respiratory_risk"] = 0
-                    future_regs_df["dehydration_risk"] = 0
-                    future_regs_df["accident_risk"] = 0
-                    future_regs_df["month"] = 1
-                    future_regs_df["is_winter"] = 0
-                    future_regs_df["is_summer"] = 0
-                
-                # Adicionar feriados
-                if holidays_df is not None and not holidays_df.empty:
-                    # Garantir que holidays_df tenha exatamente o horizonte
-                    if len(holidays_df) >= request.horizon:
-                        holidays_df = holidays_df.head(request.horizon)
-                    else:
-                        # Se não tiver dados suficientes, duplicar o último
-                        last_row = holidays_df.iloc[-1].copy()
-                        while len(holidays_df) < request.horizon:
-                            holidays_df = pd.concat([holidays_df, last_row.to_frame().T], ignore_index=True)
-                        holidays_df = holidays_df.head(request.horizon)
-                    
-                    future_regs_df = future_regs_df.merge(
-                        holidays_df, 
-                        on="ds", 
-                        how="left"
-                    )
-                    # Preencher valores faltantes para todas as variáveis de feriados
-                    future_regs_df["is_holiday"] = future_regs_df["is_holiday"].fillna(0)
-                    if "is_extraordinary_event" in future_regs_df.columns:
-                        future_regs_df["is_extraordinary_event"] = future_regs_df["is_extraordinary_event"].fillna(0)
-                    if "event_impact_factor" in future_regs_df.columns:
-                        future_regs_df["event_impact_factor"] = future_regs_df["event_impact_factor"].fillna(1.0)
-                    if "is_holiday_weekend" in future_regs_df.columns:
-                        future_regs_df["is_holiday_weekend"] = future_regs_df["is_holiday_weekend"].fillna(0)
-                    if "is_holiday_monday" in future_regs_df.columns:
-                        future_regs_df["is_holiday_monday"] = future_regs_df["is_holiday_monday"].fillna(0)
-                else:
-                    future_regs_df["is_holiday"] = 0
-                    future_regs_df["is_extraordinary_event"] = 0
-                    future_regs_df["event_impact_factor"] = 1.0
-                    future_regs_df["is_holiday_weekend"] = 0
-                    future_regs_df["is_holiday_monday"] = 0
-                
-                # Garantir que temos exatamente o horizonte de dias
-                    future_regs_df = future_regs_df.head(request.horizon)
-                
-                # Verificar e corrigir valores NaN
-                logger.debug("Verificando NaN antes da correção")
-                nan_columns = future_regs_df.columns[future_regs_df.isnull().any()].tolist()
-                if nan_columns:
-                    logger.warning("Colunas com NaN: %s", nan_columns)
-                    for col in nan_columns:
-                        logger.debug("%s: %d valores NaN", col, future_regs_df[col].isnull().sum())
-                        # Preencher NaN com valores padrão
-                        if col in ['is_winter', 'is_summer', 'is_holiday', 'is_extraordinary_event', 'is_holiday_weekend', 'is_holiday_monday']:
-                            future_regs_df[col] = future_regs_df[col].fillna(0)
-                        elif col in ['thermal_comfort', 'respiratory_risk', 'dehydration_risk', 'accident_risk']:
-                            future_regs_df[col] = future_regs_df[col].fillna(0)
-                        elif col in ['month']:
-                            future_regs_df[col] = future_regs_df[col].fillna(1)
-                        elif col in ['event_impact_factor']:
-                            future_regs_df[col] = future_regs_df[col].fillna(1.0)
-                        else:
-                            future_regs_df[col] = future_regs_df[col].fillna(0)
-                
-                logger.debug("Regressores criados: %s", list(future_regs_df.columns))
-                logger.debug("Tamanho do DataFrame: %d linhas, horizonte: %d", len(future_regs_df), request.horizon)
-                
             except Exception as e:
-                logger.warning("Erro ao buscar dados climáticos: %s", e)
-                # Se falhar, criar regressores básicos sem clima
-                future_regs_df = pd.DataFrame({
-                    "ds": pd.date_range(start=start_date, periods=request.horizon, freq="D")
-                })
-                future_regs_df["tmax"] = 25.0  # temperatura média
-                future_regs_df["tmin"] = 15.0
-                future_regs_df["precip"] = 0.0
-                future_regs_df["temp_avg"] = 20.0
-                future_regs_df["temp_range"] = 10.0
-                future_regs_df["thermal_comfort"] = 1
-                future_regs_df["respiratory_risk"] = 0
-                future_regs_df["dehydration_risk"] = 0
-                future_regs_df["accident_risk"] = 0
-                future_regs_df["month"] = 1
-                future_regs_df["is_winter"] = 0
-                future_regs_df["is_summer"] = 0
-                future_regs_df["is_holiday"] = 0
+                logger.warning("Erro ao buscar dados externos: %s", e)
+                future_regs_df = _create_default_regressors(pd.Timestamp(start_date), request.horizon)
 
         logger.debug("Horizon: %d", request.horizon)
         logger.debug("Future regressors shape: %s", future_regs_df.shape if future_regs_df is not None else 'None')
         if future_regs_df is not None:
             logger.debug("Future regressors columns: %s", list(future_regs_df.columns))
-            logger.debug("Future regressors head: %s", future_regs_df.head())
 
-        forecast_df = generate_forecast(series_id=request.series_id, horizon=request.horizon, future_regressors=future_regs_df)
+        forecast_df = generate_forecast(
+            series_id=request.series_id,
+            horizon=request.horizon,
+            future_regressors=future_regs_df
+        )
         
         # Gerar insights derivados
-        all_insights = []
-        try:
-            # Combinar insights de clima e feriados
-            all_insights.extend(weather_insights)
-            all_insights.extend(holiday_insights)
-            
-            # Gerar insights da previsão
-            forecast_insights = insights_service.generate_forecast_insights(
-                forecast_df=forecast_df,
-                weather_insights=weather_insights,
-                holiday_insights=holiday_insights
-            )
-            all_insights.extend(forecast_insights)
-            
-            # Formatar insights para o frontend
-            formatted_insights = insights_service.format_insights_for_frontend(all_insights)
-            logger.info("Total de insights gerados: %d", formatted_insights['total_insights'])
-            
-        except Exception as e:
-            logger.warning("Erro ao gerar insights: %s", e)
-            formatted_insights = {"total_insights": 0, "insights": []}
+        formatted_insights = _generate_insights(forecast_df, weather_insights, holiday_insights)
         
-        # Converter valores numpy para tipos Python nativos antes de criar ForecastPoint
-        def convert_numpy_value(value):
-            """Converte valores numpy para tipos Python nativos"""
-            if pd.isna(value):
-                return None
-            if hasattr(value, 'item'):
-                return value.item()
-            if isinstance(value, (np.integer, np.int64, np.int32)):
-                return int(value)
-            if isinstance(value, (np.floating, np.float64, np.float32)):
-                return float(value)
-            return float(value) if value is not None else None
-        
-        points: list[ForecastPoint] = [
-            ForecastPoint(
-                ds=str(row.ds),
-                yhat=convert_numpy_value(row.yhat),
-                yhat_lower=convert_numpy_value(row.yhat_lower),
-                yhat_upper=convert_numpy_value(row.yhat_upper),
-            )
-            for row in forecast_df.itertuples(index=False)
-        ]
+        # Converter previsão para pontos
+        points = _convert_forecast_to_points(forecast_df)
         
         # Criar resposta com insights
         response = ForecastResponse(series_id=request.series_id, forecast=points)
